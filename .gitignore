@@ -1,0 +1,15 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build / distribution artifacts
+/dist/
+/build/
+
+# Your patcher outputs
+/patch_output/
+/patchfiles/
+/storage/
+/additional_files/
