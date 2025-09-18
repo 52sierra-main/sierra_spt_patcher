@@ -1,5 +1,7 @@
-import os, argparse
+from __future__ import annotations
+import argparse, os
 from pathlib import Path
+
 from .paths import OUTPUT_DIR, PATCH_DIR, MISSING_DIR, STORAGE_DIR
 from .system import check_resources, optimal_threads
 from .registry import query_install, exe_version
@@ -8,15 +10,17 @@ from .storage import pack_additional, apply_storage
 from .zstd_patch import generate_patches, apply_all_patches, verify_patch_files
 from .delete_list import build_delete_list, finalize
 from .prereqs import ensure_prereqs
-from .ui import choose_directory
 
 _DEF_DELETE_LIST = str(Path(STORAGE_DIR) / "delete_list.txt")
 _DEF_INFO_PATH   = str(Path(STORAGE_DIR) / "metadata.info")
 
 
 def _cmd_generate(args: argparse.Namespace) -> None:
-    source = args.source or choose_directory("Select CLEAN game folder (source)")
-    dest   = args.dest   or choose_directory("Select TARGET folder (SPT build)")
+    source = args.source
+    dest   = args.dest
+    if not source or not dest:
+        raise SystemExit("Missing --source/--dest. Run with --help for usage.")
+
     os.makedirs(PATCH_DIR, exist_ok=True)
     os.makedirs(MISSING_DIR, exist_ok=True)
     os.makedirs(STORAGE_DIR, exist_ok=True)
@@ -57,7 +61,6 @@ def _cmd_install(args: argparse.Namespace) -> None:
     print(" Version  ", inst.version)
     print(" Publisher", inst.publisher)
 
-    # Hard guard (can be relaxed with --force)
     if not args.force:
         exe = Path(inst.install_path, "EscapeFromTarkov.exe")
         if exe_version(str(exe)) != meta.version:
@@ -65,7 +68,9 @@ def _cmd_install(args: argparse.Namespace) -> None:
         if inst.publisher != "Battlestate Games":
             raise SystemExit("Publisher mismatch. Aborting.")
 
-    dest = args.dir or choose_directory("Select the copy‑pasted Tarkov client folder")
+    dest = args.dir
+    if not dest:
+        raise SystemExit("Missing --dir (destination to patch)")
 
     check_resources()
     threads = args.threads or optimal_threads()
@@ -79,12 +84,15 @@ def _cmd_install(args: argparse.Namespace) -> None:
     if args.prereqs:
         ensure_prereqs(interactive=not args.yes)
 
-    print("Done. Have fun!")
+    if not ok:
+        print("Some patches failed. See logs above.")
+    else:
+        print("Done. Have fun!")
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="sierra-patcher", description="Sierra's unified patch generator + installer")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    sub = p.add_subparsers(dest="cmd", required=False)
 
     g = sub.add_parser("generate", help="Create a patch package from dest vs source")
     g.add_argument("--source", type=str, help="Clean game folder")
@@ -105,7 +113,10 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: list[str] | None = None) -> None:
+def run_cli(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if not getattr(args, "cmd", None):
+        parser.print_help()
+        return
     args.func(args)

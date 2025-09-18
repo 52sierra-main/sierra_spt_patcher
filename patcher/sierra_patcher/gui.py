@@ -17,6 +17,7 @@ import os
 import sys
 import threading
 import queue
+import ctypes
 import datetime as _dt
 from dataclasses import dataclass
 from typing import Optional
@@ -356,9 +357,16 @@ class SierraPatcherGUI(tk.Tk):
 # Entrypoint
 # -----------------------------
 
+def _hide_console_on_windows():
+    try:
+        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+        if hwnd:
+            ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE
+    except Exception:
+        pass
+
+
 def main():
+    _hide_console_on_windows()
     app = SierraPatcherGUI()
     app.mainloop()
-
-if __name__ == "__main__":
-    main()
