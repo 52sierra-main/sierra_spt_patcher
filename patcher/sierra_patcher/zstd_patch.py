@@ -1,8 +1,11 @@
-import os, shutil, filecmp, subprocess
+import os, shutil, filecmp, subprocess, threading
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 from .paths import ZSTD_EXE, PATCH_DIR
+
+# Optional progress callback signature:
+#   on_progress(phase: str, current: int, total: int, message: str)
 
 # ----- GENERATOR -----
 
@@ -40,17 +43,28 @@ def process_file(source_root: str, dest_root: str, dest_file: str, out_root: str
                 os.remove(p)
 
 
-def generate_patches(source_root: str, dest_root: str, out_root: str, missing_root: str, workers: int = 8) -> None:
+def generate_patches(source_root: str, dest_root: str, out_root: str, missing_root: str,
+                      workers: int = 8, on_progress=None) -> int:
+    """Generate patches; returns number of processed files (including skipped/added)."""
     files = []
     for r, _, fs in os.walk(dest_root):
         for f in fs:
             files.append(os.path.join(r, f))
 
-    with tqdm(total=len(files), desc="Generating patches", unit="file") as bar:
+    total = len(files)
+    done = 0
+    lock = threading.Lock()
+
+    with tqdm(total=total, desc="Generating patches", unit="file") as bar:
         with ThreadPoolExecutor(max_workers=workers) as ex:
             futs = [ex.submit(process_file, source_root, dest_root, f, out_root, missing_root) for f in files]
             for _ in as_completed(futs):
+                with lock:
+                    done += 1
+                    if on_progress:
+                        on_progress("generate:patch", done, total, f"patched {done}/{total}")
                 bar.update(1)
+    return total
 
 # ----- INSTALLER -----
 
@@ -75,25 +89,46 @@ def _apply_single(patch_file: Path, dest_dir: Path) -> bool:
         return False
 
 
-def apply_all_patches(dest_dir: str, workers: int = 8) -> bool:
+def apply_all_patches(dest_dir: str, workers: int = 8, on_progress=None) -> tuple[int, int, int]:
+    """Apply all patches; returns (total, succeeded, failed)."""
     zstd_files = list(Path(PATCH_DIR).rglob("*.zst"))
+    total = len(zstd_files)
     if not zstd_files:
         print("No .zst patches found.")
-        return False
-    ok = 0; fail = 0
-    with tqdm(total=len(zstd_files), desc="Applying patches", unit="file") as bar:
+        return (0, 0, 0)
+
+    ok = 0; fail = 0; done = 0
+    lock = threading.Lock()
+
+    with tqdm(total=total, desc="Applying patches", unit="file") as bar:
         with ThreadPoolExecutor(max_workers=workers) as ex:
             futs = {ex.submit(_apply_single, p, Path(dest_dir)): p for p in zstd_files}
             for fut in as_completed(futs):
-                ok += 1 if fut.result() else 0
-                fail += 0 if fut.result() else 1
+                res = fut.result()
+                with lock:
+                    done += 1
+                    if res:
+                        ok += 1
+                    else:
+                        fail += 1
+                    if on_progress:
+                        on_progress("install:patch", done, total, f"applied {done}/{total}")
                 bar.update(1)
-    print(f"done. success={ok}, failed={fail}, total={len(zstd_files)}")
-    return fail == 0
+    print(f"done. success={ok}, failed={fail}, total={total}")
+    return (total, ok, fail)
 
+# Utility counts (optional helpers for GUI to pre-compute totals)
+
+def count_dest_files(dest_root: str) -> int:
+    c = 0
+    for _, _, fs in os.walk(dest_root):
+        c += len(fs)
+    return c
+
+def count_patch_files() -> int:
+    return sum(1 for _ in Path(PATCH_DIR).rglob("*.zst"))
 
 def verify_patch_files() -> bool:
-    from .paths import ZSTD_EXE, PATCH_DIR
     bad = []
     for p in Path(PATCH_DIR).rglob("*.zst"):
         try:
