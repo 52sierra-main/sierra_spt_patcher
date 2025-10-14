@@ -32,16 +32,16 @@ def _hide_console_on_windows():
 class SierraPatcherGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Sierra Patcher – GUI")
-        self.geometry("700x500")
-        self.minsize(500, 200)
+        self.title("Sierra Installer")
+        self.geometry("700x370")
+        self.resizable(False, False)
 
         self.grid_rowconfigure(0, weight=0)   # notebook row: no vertical stretch
         self.grid_rowconfigure(1, weight=0)   # progress row: no vertical stretch
         self.grid_rowconfigure(2, weight=1)   # spacer row: absorbs extra height
         self.grid_columnconfigure(0, weight=1)
 
-        nb = ttk.Notebook(self)
+        nb = ttk.Notebook(self, height=250)
         nb.grid(row=0, column=0, sticky="ew", padx=0, pady=(0,2))
 
         self._phase_var = tk.StringVar(value="Idle")
@@ -52,10 +52,12 @@ class SierraPatcherGUI(tk.Tk):
         self._gen_tab = self._build_generate_tab(nb)
         self._ins_tab = self._build_install_tab(nb)
         self._log = self._build_log_tab(nb)
+        self._information = self._build_information_tab(nb)
 
         nb.add(self._gen_tab, text="Generate")
         nb.add(self._ins_tab, text="Install")
         nb.add(self._log, text="Logs")
+        nb.add(self._information, text="info")
 
         # Shared progress widgets below notebook
         pframe = ttk.LabelFrame(self, text="Progress")
@@ -64,6 +66,10 @@ class SierraPatcherGUI(tk.Tk):
         self._prog_bar.pack(fill=tk.X, padx=12, pady=1)
         ttk.Label(pframe, textvariable=self._phase_var).pack(anchor="w", padx=12)
         ttk.Label(pframe, textvariable=self._detail_var, foreground="#666").pack(anchor="w", padx=12, pady=(0,1))
+
+        icon_path = os.path.join(os.path.dirname(__file__), "assets", "title.ico")
+        if os.path.exists(icon_path):
+            self.iconbitmap(icon_path)
 
     # ---------- Shared progress helpers ----------
     def _reset_prog(self, total: int, phase: str):
@@ -129,6 +135,31 @@ class SierraPatcherGUI(tk.Tk):
         ttk.Button(f, text="Install patch package", command=self._run_install).grid(row=4, column=0, columnspan=3, pady=(6, 8), padx=12, sticky="w")
 
         return f
+    
+    def _build_information_tab(self, nb) -> ttk.Frame:
+
+        f = ttk.Frame(nb)
+        f.columnconfigure(1, weight=1)
+        # Logo / brand area
+        brand_frame = ttk.Frame(f)
+        brand_frame.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(10,0))
+
+        logo_path = os.path.join(os.path.dirname(__file__), "assets", "title.ico")
+        if os.path.exists(logo_path):
+            from PIL import Image, ImageTk
+            img = Image.open(logo_path).resize((120, 120))
+            self._logo_img = ImageTk.PhotoImage(img)   # keep reference!
+            tk.Label(brand_frame, image=self._logo_img).pack(side="left", padx=5)
+
+        ttk.Label(
+            brand_frame,
+            text="Clear Mirror and Calm Water\n     Sierra Installer",
+            font=("Karla", 15),
+            foreground="#000"
+        ).pack(side="left", padx=8, anchor="s")
+
+        return f
+
 
     def _build_log_tab(self, nb) -> ttk.Frame:
         f = ttk.Frame(nb)
