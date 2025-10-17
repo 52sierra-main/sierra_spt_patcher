@@ -7,11 +7,11 @@ _UNINSTALL_KEY = (r"SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\U
 class TarkovInstall:
     def __init__(self, install_path: Path, version: str, publisher: str):
         self.install_path = install_path
-        self.version = version
-        self.publisher = publisher
+#       self.version = version
+#       self.publisher = publisher
 
     def __repr__(self) -> str:
-        return f"TarkovInstall(path={self.install_path}, version={self.version}, publisher={self.publisher})"
+        return f"TarkovInstall(path={self.install_path})" #, version={self.version}, publisher={self.publisher}
 
 def query_install() -> TarkovInstall | None:
     try:
@@ -22,7 +22,7 @@ def query_install() -> TarkovInstall | None:
             loc = q("InstallLocation")
             if not loc:
                 return None
-            return TarkovInstall(Path(loc), q("DisplayVersion"), q("Publisher"))
+            return TarkovInstall(Path(loc)) #, q("DisplayVersion"), q("Publisher")
     except Exception:
         return None
 

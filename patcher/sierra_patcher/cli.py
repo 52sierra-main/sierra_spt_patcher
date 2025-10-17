@@ -1,6 +1,7 @@
 from __future__ import annotations
 import argparse, os
 from pathlib import Path
+import time
 
 from .paths import OUTPUT_DIR, PATCH_DIR, MISSING_DIR, STORAGE_DIR
 from .system import check_resources, optimal_threads
@@ -55,18 +56,15 @@ def _cmd_install(args: argparse.Namespace) -> None:
 
     inst = query_install()
     if not inst:
-        raise SystemExit("Tarkov installation not found in registry.")
+        raise SystemExit("Tarkov installation not found.")
     print("Tarkov install:")
     print(" Path     ", inst.install_path)
-    print(" Version  ", inst.version)
-    print(" Publisher", inst.publisher)
 
     if not args.force:
         exe = Path(inst.install_path, "EscapeFromTarkov.exe")
         if exe_version(str(exe)) != meta.version:
-            raise SystemExit("Client version mismatch vs metadata. Use --force to override.")
-        if inst.publisher != "Battlestate Games":
-            raise SystemExit("Publisher mismatch. Aborting.")
+            print("Warning, live client status mismatch metadata.")
+            time.sleep(1)
 
     dest = args.dir
     if not dest:
@@ -90,19 +88,12 @@ def _cmd_install(args: argparse.Namespace) -> None:
         print("Done. Have fun!")
 
 
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="sierra-patcher", description="Sierra's unified patch generator + installer")
+def build_parser(dev: bool) -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="sierra-patcher", description="Sierra's patch tool")
     sub = p.add_subparsers(dest="cmd", required=False)
 
-    g = sub.add_parser("generate", help="Create a patch package from dest vs source")
-    g.add_argument("--source", type=str, help="Clean game folder")
-    g.add_argument("--dest",   type=str, help="SPT target folder")
-    g.add_argument("--threads", type=int, help="Worker threads")
-    g.add_argument("--title", type=str, help="Target release title (e.g., SPT 3.10)")
-    g.add_argument("--date",  type=str, help="Date string to stamp")
-    g.set_defaults(func=_cmd_generate)
-
-    i = sub.add_parser("install", help="Apply an existing patch package to a chosen folder")
+    # install is always available
+    i = sub.add_parser("install", help="Apply an existing patch package")
     i.add_argument("--dir", type=str, help="Destination game folder to patch")
     i.add_argument("--threads", type=int, help="Worker threads")
     i.add_argument("--force", action="store_true", help="Bypass metadata checks")
@@ -110,13 +101,23 @@ def build_parser() -> argparse.ArgumentParser:
     i.add_argument("-y", "--yes", action="store_true", help="Assume yes for prompts")
     i.set_defaults(func=_cmd_install)
 
+    # generate only in dev mode
+    if dev:
+        g = sub.add_parser("generate", help="(dev) Create a patch package from dest vs source")
+        g.add_argument("--source", type=str, help="Clean game folder")
+        g.add_argument("--dest",   type=str, help="SPT target folder")
+        g.add_argument("--threads", type=int, help="Worker threads")
+        g.add_argument("--title", type=str, help="Release title (e.g., SPT 3.10)")
+        g.add_argument("--date",  type=str, help="Date string to stamp")
+        g.set_defaults(func=_cmd_generate)
+
     return p
 
-
-def run_cli(argv: list[str] | None = None) -> None:
-    parser = build_parser()
+def run_cli(argv: list[str] | None = None, dev: bool = False) -> None:
+    parser = build_parser(dev)
     args = parser.parse_args(argv)
     if not getattr(args, "cmd", None):
-        parser.print_help()
-        return
+        # Option B default: show GUI if no args
+        from .gui import main as gui_main
+        return gui_main(dev=dev)
     args.func(args)

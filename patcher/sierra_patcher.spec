@@ -35,7 +35,7 @@ a = Analysis(
     ['-m', 'sierra_patcher.main'],
     pathex=['.'],
     binaries=binaries,
-    datas=[],
+    datas=[('sierra_patcher/assets', 'sierra_patcher/assets'),],
     hiddenimports=hiddenimports,
     hookspath=[], hooksconfig={}, runtime_hooks=[], excludes=[], noarchive=False,
 )
