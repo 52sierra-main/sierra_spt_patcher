@@ -10,8 +10,8 @@ from . import cli, gui
 
 def main(argv: list[str] | None = None) -> None:
     argv = sys.argv[1:] if argv is None else argv
-    #dev = is_dev_mode()
-    dev = True
+    dev = is_dev_mode()
+    #dev = True
     if argv:
         return cli.run_cli(argv, dev=dev)
     else:
