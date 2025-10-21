@@ -1,51 +1,86 @@
 # sierra_patcher.spec
-# Usage:
+# Build from the project root (the folder that contains `sierra_patcher/`, `bin/`, etc.):
 #   pyinstaller sierra_patcher.spec
-# Produces a single executable: dist/sierra-patcher.exe
 #
-# Repo layout (expected):
-#   sierra_patcher/        # package with cli.py and modules
-#   bin/7za.exe
-#   bin/zstd64/zstd.exe
-#
-# NOTE:
-# - This is a ONEFILE build. If you prefer ONEDIR, see the commented
-#   COLLECT section at the bottom and remove onefile=True in EXE.
+# Output: dist/sierra-patcher.exe
 
 import os
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
-project_root = os.path.abspath(os.path.dirname(__file__))
+# --- robust project root (no reliance on __file__) ---
+def _project_root():
+    try:
+        return os.path.abspath(os.path.dirname(__file__))
+    except NameError:
+        return os.path.abspath(os.getcwd())
+
+PR = _project_root()
+def P(*parts):  # join helper
+    return os.path.join(PR, *parts)
 
 block_cipher = None
 
-binaries = [
-    ('bin/7za.exe', 'bin'),
-    ('bin/zstd64/zstd.exe', 'bin/zstd64'),
-]
+# --- external tools (only add if they exist) ---
+binaries = []
+def _add_bin(src, dest):
+    if os.path.exists(src):
+        binaries.append((src, dest))
 
-hiddenimports = [
-    'win32timezone',
-    'tkinter',
-]
+_add_bin(P('bin', '7za.exe'), 'bin')
+_add_bin(P('bin', 'zstd64', 'zstd.exe'), os.path.join('bin', 'zstd64'))
 
-# If you collect package data elsewhere, keep that too
+# --- assets / data files ---
+datas = []
+# package assets (icons, images, etc.)
+datas += collect_data_files('sierra_patcher', includes=['assets/*'])
+
+# optional top-level icon (e.g., project_root/title.ico)
+if os.path.exists(P('title.ico')):
+    datas.append((P('title.ico'), '.'))
+
+# --- hidden imports ---
+hiddenimports = (
+    collect_submodules('sierra_patcher') + [
+        'tkinter',
+        'win32timezone',
+        # Pillow bits used for logo rendering
+        'PIL', 'PIL.Image', 'PIL.ImageTk',
+    ]
+)
+
+# choose an icon if present
+icon_path = P('sierra_patcher', 'assets', 'title.ico')
+if not os.path.exists(icon_path):
+    icon_path = P('title.ico') if os.path.exists(P('title.ico')) else None
+
+# helper for absolute paths based on project root PR
+def P(*parts): return os.path.join(PR, *parts)
 
 a = Analysis(
-    ['-m', 'sierra_patcher.main'],
-    pathex=['.'],
+    [P('sierra_patcher', 'main.py')],   # 
+    pathex=[PR],
     binaries=binaries,
-    datas=[('sierra_patcher/assets', 'sierra_patcher/assets'),],
+    datas=datas,
     hiddenimports=hiddenimports,
-    hookspath=[], hooksconfig={}, runtime_hooks=[], excludes=[], noarchive=False,
+    hookspath=[], hooksconfig={}, runtime_hooks=[],
+    excludes=[], noarchive=False,
 )
+
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(
-    pyz, a.scripts, a.binaries, a.zipfiles, a.datas, [],
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    [],
     name='sierra-patcher',
-    console=True,         # keep console for CLI; GUI hides it at runtime
-    debug=False, strip=False, upx=True,
+    icon=icon_path,          # None if not found
+    console=True,            # keep console for CLI; GUI hides it at runtime
+    debug=False,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
 )
-

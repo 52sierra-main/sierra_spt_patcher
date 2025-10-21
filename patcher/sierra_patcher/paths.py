@@ -1,31 +1,36 @@
+# sierra_patcher/paths.py
+from __future__ import annotations
 import os, sys
 from pathlib import Path
 
-__all__ = ["get_base_dir", "get_bin_dir", "SCRIPT_DIR", "BUNDLE_DIR",
-           "PATCH_DIR", "OUTPUT_DIR", "MISSING_DIR", "STORAGE_DIR",
-           "SEVENZIP", "ZSTD_EXE"]
+# Base dir of package at runtime (works in dev and PyInstaller EXE)
+def _app_root() -> Path:
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS)  # PyInstaller staging dir
+    return Path(__file__).resolve().parent
 
-def get_base_dir() -> str:
-    """Directory of the script or PyInstaller executable."""
-    if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.abspath(__file__))
+APP_ROOT: Path = _app_root()
 
-# In a onefile build, bundled files live next to the executable on recent PyInstaller.
-# We keep a separate accessor to avoid mixing concerns.
+# Binaries bundled via spec
+BIN_DIR: Path = APP_ROOT / "bin"
+ZSTD_DIR: Path = BIN_DIR / "zstd64"
 
-def get_bin_dir() -> Path:
-    if getattr(sys, 'frozen', False):
-        return Path(sys._MEIPASS) if hasattr(sys, "_MEIPASS") else Path(get_base_dir())
-    return Path(get_base_dir())
+# Standardized executable names (strings, because subprocess likes str)
+ZSTD_EXE: str      = str(ZSTD_DIR / "zstd.exe")
+SEVENZIP: str  = str(BIN_DIR / "7za.exe")  # 7-Zip standalone CLI
 
-SCRIPT_DIR = get_base_dir()
-BUNDLE_DIR = get_bin_dir()
+# Output layout (adjust if you changed these elsewhere)
+OUTPUT_DIR: str   = str(APP_ROOT / "patch_output")
+PATCH_DIR: str    = str(Path(OUTPUT_DIR) / "patchfiles")
+MISSING_DIR: str  = str(Path(OUTPUT_DIR) / "additional_files")
+STORAGE_DIR: str  = str(Path(OUTPUT_DIR) / "storage")
 
-OUTPUT_DIR  = os.path.join(SCRIPT_DIR, "patch_output")
-PATCH_DIR   = os.path.join(OUTPUT_DIR, "patchfiles")
-MISSING_DIR = os.path.join(OUTPUT_DIR, "additional_files")
-STORAGE_DIR = os.path.join(OUTPUT_DIR, "storage")
+# Ensure directories exist when imported (safe no-ops if they already exist)
+for d in (OUTPUT_DIR, PATCH_DIR, MISSING_DIR, STORAGE_DIR):
+    os.makedirs(d, exist_ok=True)
 
-SEVENZIP = str(BUNDLE_DIR / "bin" / "7za.exe")
-ZSTD_EXE = str(BUNDLE_DIR / "bin" / "zstd64" / "zstd.exe")
+__all__ = [
+    "APP_ROOT", "BIN_DIR", "ZSTD_DIR",
+    "ZSTD_EXE", "SEVENZIP_EXE",
+    "OUTPUT_DIR", "PATCH_DIR", "MISSING_DIR", "STORAGE_DIR",
+]
