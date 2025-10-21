@@ -11,12 +11,16 @@ def _app_root() -> Path:
 
 APP_ROOT: Path = _app_root()
 
+# Assets
+ASSET_DIR: Path = APP_ROOT / "sierra_patcher" / "assets"
+TITLE: str     = str(ASSET_DIR / "title.ico")
+
 # Binaries bundled via spec
-BIN_DIR: Path = APP_ROOT / "bin"
+BIN_DIR: Path  = APP_ROOT / "bin"
 ZSTD_DIR: Path = BIN_DIR / "zstd64"
 
 # Standardized executable names (strings, because subprocess likes str)
-ZSTD_EXE: str      = str(ZSTD_DIR / "zstd.exe")
+ZSTD_EXE: str  = str(ZSTD_DIR / "zstd.exe")
 SEVENZIP: str  = str(BIN_DIR / "7za.exe")  # 7-Zip standalone CLI
 
 # Output layout (adjust if you changed these elsewhere)

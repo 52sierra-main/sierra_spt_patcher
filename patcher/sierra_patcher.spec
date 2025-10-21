@@ -31,6 +31,10 @@ _add_bin(P('bin', 'zstd64', 'zstd.exe'), os.path.join('bin', 'zstd64'))
 
 # --- assets / data files ---
 datas = []
+def _add_data(src, dest):
+    if os.path.exists(src):
+        datas.append((src, dest))
+_add_data(P('sierra_patcher', 'assets', 'title.ico'), os.path.join('sierra_patcher', 'assets'))
 # package assets (icons, images, etc.)
 datas += collect_data_files('sierra_patcher', includes=['assets/*'])
 
@@ -78,7 +82,7 @@ exe = EXE(
     [],
     name='sierra-patcher',
     icon=icon_path,          # None if not found
-    console=True,            # keep console for CLI; GUI hides it at runtime
+    console=False,            # keep console for CLI; GUI hides it at runtime
     debug=False,
     strip=False,
     upx=True,

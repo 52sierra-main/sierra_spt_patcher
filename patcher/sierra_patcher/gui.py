@@ -9,7 +9,7 @@ import webbrowser
 from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 
-from .paths import OUTPUT_DIR, PATCH_DIR, MISSING_DIR, STORAGE_DIR
+from .paths import OUTPUT_DIR, PATCH_DIR, MISSING_DIR, STORAGE_DIR, APP_ROOT, TITLE
 from .system import check_resources, optimal_threads
 from .registry import query_install, exe_version
 from .metadata import Meta, stamp_from_game_exe
@@ -97,7 +97,7 @@ class SierraPatcherGUI(tk.Tk):
         ttk.Label(pframe, textvariable=self._phase_var).pack(anchor="w", padx=12)
         ttk.Label(pframe, textvariable=self._detail_var, foreground="#666").pack(anchor="w", padx=12, pady=(0,1))
 
-        icon_path = os.path.join(os.path.dirname(__file__), "assets", "title.ico")
+        icon_path =os.path.join(APP_ROOT,"sierra_patcher", "assets", "title.ico") #os.path.join(os.path.dirname(__file__), "assets", "title.ico")
         if os.path.exists(icon_path):
             self.iconbitmap(icon_path)
 
