@@ -4,12 +4,13 @@ import tkinter as tk
 import os, shutil, platform
 import psutil
 import cpuinfo
+import traceback
 from pathlib import Path
 import webbrowser
 from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 
-from .paths import OUTPUT_DIR, PATCH_DIR, MISSING_DIR, STORAGE_DIR, APP_ROOT, TITLE
+from .paths import OUTPUT_DIR, PATCH_out_DIR, MISSING_out_DIR, STORAGE_out_DIR, PATCH_read_DIR,MISSING_read_DIR,STORAGE_read_DIR, APP_ROOT, TITLE
 from .system import check_resources, optimal_threads
 from .registry import query_install, exe_version
 from .metadata import Meta, stamp_from_game_exe
@@ -20,6 +21,7 @@ from .zstd_patch import (
 )
 from .delete_list import build_delete_list, finalize
 from .prereqs import ensure_prereqs
+from . import proc
 
 # ---- console hider (for GUI when console=True) ----
 
@@ -47,6 +49,15 @@ def copy_to_clipboard(root, text: str, toast: bool = True):
             messagebox.showinfo("Copied", "Copied to clipboard.")
     except Exception:
         pass
+
+def _safe_call(widget, func, *args, **kwargs):
+    """Run func on Tk main thread."""
+    try:
+        widget.after(0, lambda: func(*args, **kwargs))
+    except Exception:
+        # best-effort fallback (e.g., during shutdown)
+        try: func(*args, **kwargs)
+        except Exception: pass
 
 # -----------------------------
 # GUI
@@ -82,11 +93,11 @@ class SierraPatcherGUI(tk.Tk):
             nb.add(self._gen_tab, text="Generate")
 
         self._ins_tab = self._build_install_tab(nb)
-        self._log = self._build_log_tab(nb)
+        self._log_tab = self._build_log_tab(nb)
         self._information = self._build_information_tab(nb)
 
         nb.add(self._ins_tab, text="Install")
-        nb.add(self._log, text="Logs")
+        nb.add(self._log_tab, text="Logs")
         nb.add(self._information, text="info")
 
         # Shared progress widgets below notebook
@@ -97,27 +108,50 @@ class SierraPatcherGUI(tk.Tk):
         ttk.Label(pframe, textvariable=self._phase_var).pack(anchor="w", padx=12)
         ttk.Label(pframe, textvariable=self._detail_var, foreground="#666").pack(anchor="w", padx=12, pady=(0,1))
 
-        icon_path =os.path.join(APP_ROOT,"sierra_patcher", "assets", "title.ico") #os.path.join(os.path.dirname(__file__), "assets", "title.ico")
+        icon_path =os.path.join(os.path.dirname(__file__), "assets", "title.ico")
         if os.path.exists(icon_path):
             self.iconbitmap(icon_path)
 
     # ---------- Shared progress helpers ----------
     def _reset_prog(self, total: int, phase: str):
-        self._total_var = max(1, total)
-        self._done_var = 0
-        self._phase_var.set(phase)
-        self._detail_var.set("")
-        self._prog_bar.configure(mode="determinate", maximum=self._total_var, value=0)
+        def _do():
+            self._total_var = max(1, total)
+            self._done_var = 0
+            self._phase_var.set(phase)
+            self._detail_var.set("")
+            self._prog_bar.configure(mode="determinate", maximum=self._total_var, value=0)
+        _safe_call(self, _do)
 
     def _step_prog(self, message: str | None = None):
-        self._done_var += 1
-        self._prog_bar['value'] = self._done_var
-        if message:
-            self._detail_var.set(message)
-        self._prog_bar.update_idletasks()
+        def _do():
+            self._done_var += 1
+            self._prog_bar['value'] = self._done_var
+            if message:
+                self._detail_var.set(message)
+            self._prog_bar.update_idletasks()
+        _safe_call(self, _do)
 
     def _set_phase(self, phase: str):
-        self._phase_var.set(phase)
+        _safe_call(self, self._phase_var.set, phase)
+
+    def _abort_generate(self):
+        try:
+            self._log("[generate] abort requested")
+            self._cancel.set()
+            from . import proc
+            proc.kill_all()
+        except Exception:
+            pass
+
+    def _abort_install(self):
+        try:
+            self._log("[install] abort requested")
+            self._cancel.set()
+            from . import proc
+            proc.kill_all()
+        except Exception:
+            pass
+
 
     # ---------- tab helpers ----------
 
@@ -195,7 +229,7 @@ class SierraPatcherGUI(tk.Tk):
 
         # --- Patcher (metadata + patch count) ---
         try:
-            meta = Meta.read(STORAGE_DIR)
+            meta = Meta.read(STORAGE_read_DIR)
             self._stat["pat_version"].set(meta.version or "—")
             self._stat["pat_title"].set(meta.title or "—")
         except Exception:
@@ -210,19 +244,19 @@ class SierraPatcherGUI(tk.Tk):
         # --- Tarkov install ---
         try:
             inst = query_install()
-            exe = os.path.join(inst.install_path, "EscapeFromTarkov.exe")
+            exe = os.path.join(inst["install_path"], "EscapeFromTarkov.exe")
             if inst:
-                self._stat["tk_path"].set(str(inst.install_path))
-                self._stat["tk_version"].set(inst.version or exe_version(exe) or "—")
-                self._stat["tk_publisher"].set(inst.publisher or "—")
+                self._stat["tk_path"].set(str(inst["install_path"]))
+                self._stat["tk_version"].set(exe_version(exe) or "—") #inst["display_version"] or 
+                self._stat["tk_publisher"].set("—")#inst["publisher"] or 
             else:
                 self._stat["tk_path"].set("Not found")
-                self._stat["tk_version"].set("—")
-                self._stat["tk_publisher"].set("—")
+                self._stat["tk_version"].set("not found")
+                self._stat["tk_publisher"].set("not found")
         except Exception:
-            self._stat["tk_path"].set("—")
-            self._stat["tk_version"].set("—")
-            self._stat["tk_publisher"].set("—")
+            self._stat["tk_path"].set("error")
+            self._stat["tk_version"].set("error")
+            self._stat["tk_publisher"].set("error")
 
         # --- Destination (chosen folder) ---
         dst = self.i_dest.get().strip()
@@ -258,7 +292,8 @@ class SierraPatcherGUI(tk.Tk):
 
         # Generate button inside Generate tab
         ttk.Button(f, text="Generate patch package", command=self._run_generate).grid(row=5, column=0, columnspan=3, pady=(6, 8), padx=12, sticky="w")
-
+        self.btn_abort_gen = ttk.Button(f, text="Abort", command=self._abort_generate, state="disabled")
+        self.btn_abort_gen.grid(row=5, column=1, padx=6, pady=(6,8), sticky="w")
         return f
 
     def _build_install_tab(self, nb) -> ttk.Frame:
@@ -297,6 +332,9 @@ class SierraPatcherGUI(tk.Tk):
         self.btn_install = ttk.Button(f, text="Install SPT", style="AccentInstall.TButton", command=self._run_install)
         self.btn_install.state(["!disabled"])
         self.btn_install.grid(row=4, column=0, columnspan=3, pady=(8, 8), padx=12, sticky="w")
+
+        self.btn_abort_ins = ttk.Button(f, text="Abort", command=self._abort_install, state="disabled")
+        self.btn_abort_ins.grid(row=4, column=1, padx=6, pady=(6,8), sticky="w")
 
         # ---- Status panel -------------------------------------------------------
         card = ttk.LabelFrame(f, text="Status")
@@ -480,6 +518,21 @@ class SierraPatcherGUI(tk.Tk):
         self.log_text = ScrolledText(f, state="normal", wrap="word")
         self.log_text.grid(row=0, column=0, sticky="nsew", padx=8, pady=2)
         return f
+    
+    def _append_log(self, msg: str):
+        try:
+            self.log_text.insert("end", msg + "\n")
+            self.log_text.see("end")
+        except Exception:
+            pass
+
+    def _log(self, *parts):
+        _safe_call(self, self._append_log, " ".join(str(p) for p in parts))
+
+    def _log_exc(self, prefix="Error"):
+        tb = "".join(traceback.format_exc())
+        _safe_call(self, self._append_log, f"{prefix}:\n{tb}")
+
 
     def _row(self, parent, r, label, entry_widget, browse=None, required=False):
         # label with optional red asterisk
@@ -502,6 +555,8 @@ class SierraPatcherGUI(tk.Tk):
 
     # ---------- Action handlers ----------
     def _run_generate(self):
+        self._cancel = threading.Event()
+        self.btn_abort_gen.state(["!disabled"])
         src = self.g_source.get().strip()
         dst = self.g_dest.get().strip()
         title = self.g_title.get().strip() or ""
@@ -518,39 +573,67 @@ class SierraPatcherGUI(tk.Tk):
         self._reset_prog(total_files + extra_steps, "Generating patches")
 
         def on_progress(phase, current, total, message):
-            self._detail_var.set(message)
-            # We treat each processed file as one progress step
-            self._prog_bar['value'] = min(self._total_var, self._done_var + current)
+            _safe_call(self, self._detail_var.set, message)
+            # keep progress determinate by mapping current → value without touching Tk from worker
+            def _do():
+                self._prog_bar['value'] = min(self._total_var, self._done_var + current)
+            _safe_call(self, _do)
 
         def worker():
-            # Patching phase
-            generate_patches(src, dst, PATCH_DIR, MISSING_DIR, workers=threads,
-                              on_progress=on_progress)
-            self._done_var = total_files
+            try:
+                for d in (OUTPUT_DIR, PATCH_out_DIR, MISSING_out_DIR, STORAGE_out_DIR):
+                    os.makedirs(d, exist_ok=True)
 
-            # Post steps (each +1)
-            self._set_phase("Packing additional files")
-            pack_additional(MISSING_DIR, STORAGE_DIR)
-            self._step_prog("additional files packed")
+                self._log("[generate] start")
+                # basic sanity: tools present?
+                from .paths import ZSTD_EXE
+                if not os.path.isfile(ZSTD_EXE):
+                    raise RuntimeError(f"zstd not found at: {ZSTD_EXE}")
 
-            self._set_phase("Building delete list")
-            build_delete_list(src, dst, os.path.join(STORAGE_DIR, "delete_list.txt"))
-            self._step_prog("delete list written")
+                # Patching phase
+                generate_patches(src, dst, PATCH_out_DIR, MISSING_out_DIR, workers=threads,
+                                on_progress=on_progress, cancel_event=self._cancel, use_tqdm=False)
+                if self._cancel.is_set():
+                    self._set_phase("Cancelled")
+                    self._log("[generate] cancelled")
+                    return
+                self._done_var = total_files
 
-            self._set_phase("Stamping metadata")
-            stamp_from_game_exe(os.path.join(STORAGE_DIR, "metadata.info"), src, title, date)
-            self._step_prog("metadata stamped")
+                self._set_phase("Packing additional files")
+                pack_additional(MISSING_out_DIR, STORAGE_out_DIR, cancel_event=self._cancel)
+                self._step_prog("additional files packed")
 
-            self._set_phase("Verifying patches")
-            verify_patch_files()
-            self._step_prog("verification complete")
+                self._set_phase("Building delete list")
+                build_delete_list(src, dst, os.path.join(STORAGE_out_DIR, "delete_list.txt"))
+                self._step_prog("delete list written")
 
-            self._set_phase("Done")
-            messagebox.showinfo("Generate", f"Patch package ready in:\n{OUTPUT_DIR}")
+                self._set_phase("Stamping metadata")
+                stamp_from_game_exe(os.path.join(STORAGE_out_DIR, "metadata.info"), src, title, date)
+                self._step_prog("metadata stamped")
+
+                self._set_phase("Verifying patches")
+                verify_patch_files(cancel_event=self._cancel)
+                self._step_prog("verification complete")
+
+                self._set_phase("Done")
+                self._log("[generate] done")
+                _safe_call(self, messagebox.showinfo, "Generate", f"Patch package ready in:\n{OUTPUT_DIR}")
+            except proc.Cancelled:
+                self._set_phase("Cancelled")
+                self._log("[generate] cancelled by user")
+                return
+            except Exception:
+                self._log_exc("[generate] failed")
+                _safe_call(self, messagebox.showerror, "Generate", "Generation failed. See Logs tab for details.")
+            finally:
+                proc.kill_all()
+                _safe_call(self, self.btn_abort_gen.state, ["disabled"])
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _run_install(self):
+        self._cancel = threading.Event()
+        self.btn_abort_ins.state(["!disabled"])
         dst = self.i_dest.get().strip()
         threads = int(self.i_threads.get())
         force = self.i_force.get()
@@ -566,41 +649,64 @@ class SierraPatcherGUI(tk.Tk):
         self._reset_prog(total_patches + extra_steps, "Applying patches")
 
         def on_progress(phase, current, total, message):
-            self._detail_var.set(message)
-            self._prog_bar['value'] = min(self._total_var, self._done_var + current)
+            _safe_call(self, self._detail_var.set, message)
+            # keep progress determinate by mapping current → value without touching Tk from worker
+            def _do():
+                self._prog_bar['value'] = min(self._total_var, self._done_var + current)
+            _safe_call(self, _do)
 
         def worker():
-            # Metadata + guards
-            meta = Meta.read(STORAGE_DIR)
-            inst = query_install()
-            if not inst:
-                messagebox.showerror("Install", "Tarkov installation not found.")
-                return
-            if not force:
-                exe = os.path.join(inst.install_path, "EscapeFromTarkov.exe")
-                if exe_version(exe) != meta.version:
-                    messagebox.showerror("Install", "Warning, the version of your live tarkov is not compatible with this installer.")
+            try:
+                self._log("[install] start")
+                from .paths import ZSTD_EXE
+                if not os.path.isfile(ZSTD_EXE):
+                    raise RuntimeError(f"zstd not found at: {ZSTD_EXE}")
+
+                meta = Meta.read(STORAGE_read_DIR)
+                inst = query_install()  # now dict; keep it that way consistently
+                if not inst:
+                    raise RuntimeError("Tarkov installation not found (registry).")
+
+                if not force:
+                    exe = os.path.join(inst["install_path"], "EscapeFromTarkov.exe")
+                    ver_now = exe_version(exe) or "-"
+                    if meta.version and ver_now != meta.version:
+                        raise RuntimeError(f"Live Tarkov version {ver_now} != target {meta.version}")
+
+                apply_all_patches(dst, workers=threads, on_progress=on_progress,
+                              cancel_event=self._cancel, use_tqdm=False)
+                if self._cancel.is_set():
+                    self._set_phase("Cancelled")
+                    self._log("[install] cancelled")
                     return
+                self._done_var = total_patches
 
-            # Apply patches
-            apply_all_patches(dst, workers=threads, on_progress=on_progress)
-            self._done_var = total_patches
+                self._set_phase("Finalizing (delete list)")
+                finalize(dst, os.path.join(STORAGE_read_DIR, "delete_list.txt"))
+                self._step_prog("cleanup done")
 
-            self._set_phase("Finalizing (delete list)")
-            finalize(dst, os.path.join(STORAGE_DIR, "delete_list.txt"))
-            self._step_prog("cleanup done")
+                self._set_phase("Applying storage")
+                apply_storage(STORAGE_read_DIR, dst, cancel_event=self._cancel)
+                self._step_prog("storage applied")
 
-            self._set_phase("Applying storage")
-            apply_storage(STORAGE_DIR, dst)
-            self._step_prog("storage applied")
+                if prereq:
+                    self._set_phase("Installing .NET prerequisites")
+                    ensure_prereqs(interactive=False)
+                    self._step_prog("prereqs installed")
 
-            if prereq:
-                self._set_phase("Installing .NET prerequisites")
-                ensure_prereqs(interactive=False)
-                self._step_prog("prereqs installed")
-
-            self._set_phase("Done")
-            messagebox.showinfo("Install", "Patch applied successfully.")
+                self._set_phase("Done")
+                self._log("[install] done")
+                _safe_call(self, messagebox.showinfo, "Install", "Patch applied successfully.")
+            except proc.Cancelled:
+                self._set_phase("Cancelled")
+                self._log("[install] cancelled by user")
+                return
+            except Exception:
+                self._log_exc("[install] failed")
+                _safe_call(self, messagebox.showerror, "Install", "Install failed. See Logs tab for details.")
+            finally:
+                proc.kill_all()
+                _safe_call(self, self.btn_abort_ins.state, ["disabled"])
 
         threading.Thread(target=worker, daemon=True).start()
 

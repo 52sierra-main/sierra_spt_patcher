@@ -3,38 +3,49 @@ from __future__ import annotations
 import os, sys
 from pathlib import Path
 
-# Base dir of package at runtime (works in dev and PyInstaller EXE)
-def _app_root() -> Path:
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        return Path(sys._MEIPASS)  # PyInstaller staging dir
-    return Path(__file__).resolve().parent
+# Where the package code lives (…/sierra_patcher)
+PKG_ROOT: Path = Path(__file__).resolve().parent
 
-APP_ROOT: Path = _app_root()
+# Where the bundled files live at runtime:
+# - Frozen: sys._MEIPASS (top of the extracted bundle)
+# - Dev: project root (one level above sierra_patcher/)
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    APP_ROOT: Path = Path(sys._MEIPASS)
+else:
+    APP_ROOT: Path = PKG_ROOT.parent
 
-# Assets
-ASSET_DIR: Path = APP_ROOT / "sierra_patcher" / "assets"
-TITLE: str     = str(ASSET_DIR / "title.ico")
+# ---- Assets (live under the package) ----
+ASSET_DIR: Path = PKG_ROOT / "assets"
+TITLE: str      = str(ASSET_DIR / "title.ico")
 
-# Binaries bundled via spec
-BIN_DIR: Path  = APP_ROOT / "bin"
-ZSTD_DIR: Path = BIN_DIR / "zstd64"
+# ---- Binaries (your spec places them at top-level bin/) ----
+BIN_DIR: Path    = APP_ROOT / "bin"
+ZSTD_DIR: Path   = BIN_DIR / "zstd64"
+ZSTD_EXE: str    = str(ZSTD_DIR / "zstd.exe")
+SEVENZIP: str= str(BIN_DIR / "7za.exe")
 
-# Standardized executable names (strings, because subprocess likes str)
-ZSTD_EXE: str  = str(ZSTD_DIR / "zstd.exe")
-SEVENZIP: str  = str(BIN_DIR / "7za.exe")  # 7-Zip standalone CLI
+# ---- Outputs (next to the running executable) ----
+def _working_dir() -> Path:
+    # Frozen: folder containing your .exe; Dev: current cwd (or choose PKG_ROOT.parent)
+    try:
+        return Path(sys.executable).resolve().parent
+    except Exception:
+        return Path.cwd()
 
-# Output layout (adjust if you changed these elsewhere)
-OUTPUT_DIR: str   = str(APP_ROOT / "patch_output")
-PATCH_DIR: str    = str(Path(OUTPUT_DIR) / "patchfiles")
-MISSING_DIR: str  = str(Path(OUTPUT_DIR) / "additional_files")
-STORAGE_DIR: str  = str(Path(OUTPUT_DIR) / "storage")
+WORKING_DIR: Path = _working_dir()
+OUTPUT_DIR: str   = str(WORKING_DIR / "patch_output")
+PATCH_out_DIR: str    = str(Path(OUTPUT_DIR) / "patchfiles")
+MISSING_out_DIR: str  = str(Path(OUTPUT_DIR) / "additional_files")
+STORAGE_out_DIR: str  = str(Path(OUTPUT_DIR) / "storage")
 
-# Ensure directories exist when imported (safe no-ops if they already exist)
-for d in (OUTPUT_DIR, PATCH_DIR, MISSING_DIR, STORAGE_DIR):
-    os.makedirs(d, exist_ok=True)
+PATCH_read_DIR: str    = str(Path(WORKING_DIR) / "patchfiles")
+MISSING_read_DIR: str  = str(Path(WORKING_DIR) / "additional_files")
+STORAGE_read_DIR: str  = str(Path(WORKING_DIR) / "storage")
 
 __all__ = [
-    "APP_ROOT", "BIN_DIR", "ZSTD_DIR",
-    "ZSTD_EXE", "SEVENZIP_EXE",
-    "OUTPUT_DIR", "PATCH_DIR", "MISSING_DIR", "STORAGE_DIR",
+    "PKG_ROOT", "APP_ROOT",
+    "ASSET_DIR", "TITLE",
+    "BIN_DIR", "ZSTD_DIR",
+    "ZSTD_EXE", "SEVENZIP",
+    "OUTPUT_DIR", "PATCH_out_DIR", "MISSING_out_DIR", "STORAGE_out_DIR","PATCH_read_DIR", "MISSING_read_DIR","STORAGE_read_DIR",
 ]

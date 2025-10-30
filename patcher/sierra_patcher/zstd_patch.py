@@ -2,6 +2,8 @@ import os, shutil, filecmp, subprocess, threading
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
+from .proc import run_quiet
+import sys, io
 from .paths import ZSTD_EXE, PATCH_DIR
 
 # Optional progress callback signature:
@@ -9,7 +11,7 @@ from .paths import ZSTD_EXE, PATCH_DIR
 
 # ----- GENERATOR -----
 
-def process_file(source_root: str, dest_root: str, dest_file: str, out_root: str, missing_root: str) -> None:
+def process_file(source_root: str, dest_root: str, dest_file: str, out_root: str, missing_root: str,cancel_event=None) -> None:
     rel = os.path.relpath(dest_file, dest_root)
     src = os.path.join(source_root, rel)
     patch_file = os.path.join(out_root, rel + ".zst")
@@ -26,15 +28,15 @@ def process_file(source_root: str, dest_root: str, dest_file: str, out_root: str
         return  # identical
 
     # create patch
-    subprocess.run([ZSTD_EXE, "--patch-from", src, dest_file, "-o", patch_file, "--long=31", "-T1"], check=True,
-                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    run_quiet([ZSTD_EXE, "--patch-from", src, dest_file, "-o", patch_file, "--long=31", "-T1"], check=True,
+                   capture=True, cancel_event=cancel_event)
 
     # quick verification: apply to a temp copy and compare
     src_tmp, out_tmp = src + ".tmp_src", dest_file + ".tmp_out"
     try:
         shutil.copy(src, src_tmp)
-        subprocess.run([ZSTD_EXE, "-d", "--patch-from", src_tmp, patch_file, "-o", out_tmp, "--long=31", "-T1"],
-                       check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        run_quiet([ZSTD_EXE, "-d", "--patch-from", src_tmp, patch_file, "-o", out_tmp, "--long=31", "-T1"],
+                       check=True, capture=True, cancel_event=cancel_event)
         if not filecmp.cmp(dest_file, out_tmp, shallow=False):
             raise RuntimeError(f"verification failed for {rel}")
     finally:
@@ -44,7 +46,7 @@ def process_file(source_root: str, dest_root: str, dest_file: str, out_root: str
 
 
 def generate_patches(source_root: str, dest_root: str, out_root: str, missing_root: str,
-                      workers: int = 8, on_progress=None) -> int:
+                      workers: int = 8, on_progress=None, cancel_event=None, use_tqdm=True) -> int:
     """Generate patches; returns number of processed files (including skipped/added)."""
     files = []
     for r, _, fs in os.walk(dest_root):
@@ -55,10 +57,12 @@ def generate_patches(source_root: str, dest_root: str, out_root: str, missing_ro
     done = 0
     lock = threading.Lock()
 
-    with tqdm(total=total, desc="Generating patches", unit="file") as bar:
+    with tqdm(total=total, desc="Generating patches", unit="file", file=_tqdm_file(), disable=_tqdm_disable()) as bar:
         with ThreadPoolExecutor(max_workers=workers) as ex:
-            futs = [ex.submit(process_file, source_root, dest_root, f, out_root, missing_root) for f in files]
+            futs = [ex.submit(process_file, source_root, dest_root, f, out_root, missing_root, cancel_event) for f in files]
             for _ in as_completed(futs):
+                if cancel_event and cancel_event.is_set():
+                    break
                 with lock:
                     done += 1
                     if on_progress:
@@ -68,7 +72,7 @@ def generate_patches(source_root: str, dest_root: str, out_root: str, missing_ro
 
 # ----- INSTALLER -----
 
-def _apply_single(patch_file: Path, dest_dir: Path) -> bool:
+def _apply_single(patch_file: Path, dest_dir: Path, cancel_event=None) -> bool:
     rel = patch_file.relative_to(PATCH_DIR).with_suffix("")
     old_file = dest_dir / rel
     if not old_file.exists():
@@ -76,8 +80,8 @@ def _apply_single(patch_file: Path, dest_dir: Path) -> bool:
         return False
     tmp = old_file.with_suffix(old_file.suffix + ".new")
     try:
-        subprocess.run([ZSTD_EXE, "-d", "--patch-from", str(old_file), str(patch_file), "-o", str(tmp), "-T1", "--long=31"],
-                       check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        run_quiet([ZSTD_EXE, "-d", "--patch-from", str(old_file), str(patch_file), "-o", str(tmp), "-T1", "--long=31"],
+                       check=True, capture=True, cancel_event=cancel_event)
         if not tmp.exists() or tmp.stat().st_size == 0:
             if tmp.exists(): tmp.unlink()
             return False
@@ -89,7 +93,7 @@ def _apply_single(patch_file: Path, dest_dir: Path) -> bool:
         return False
 
 
-def apply_all_patches(dest_dir: str, workers: int = 8, on_progress=None) -> tuple[int, int, int]:
+def apply_all_patches(dest_dir: str, workers: int = 8, on_progress=None, cancel_event=None, use_tqdm=True) -> tuple[int, int, int]:
     """Apply all patches; returns (total, succeeded, failed)."""
     zstd_files = list(Path(PATCH_DIR).rglob("*.zst"))
     total = len(zstd_files)
@@ -100,10 +104,12 @@ def apply_all_patches(dest_dir: str, workers: int = 8, on_progress=None) -> tupl
     ok = 0; fail = 0; done = 0
     lock = threading.Lock()
 
-    with tqdm(total=total, desc="Applying patches", unit="file") as bar:
+    with tqdm(total=total, desc="Applying patches", unit="file", file=_tqdm_file(), disable=_tqdm_disable()) as bar:
         with ThreadPoolExecutor(max_workers=workers) as ex:
-            futs = {ex.submit(_apply_single, p, Path(dest_dir)): p for p in zstd_files}
+            futs = {ex.submit(_apply_single, p, Path(dest_dir), cancel_event): p for p in zstd_files}
             for fut in as_completed(futs):
+                if cancel_event and cancel_event.is_set():
+                    break
                 res = fut.result()
                 with lock:
                     done += 1
@@ -128,11 +134,11 @@ def count_dest_files(dest_root: str) -> int:
 def count_patch_files() -> int:
     return sum(1 for _ in Path(PATCH_DIR).rglob("*.zst"))
 
-def verify_patch_files() -> bool:
+def verify_patch_files(cancel_event=None) -> bool:
     bad = []
     for p in Path(PATCH_DIR).rglob("*.zst"):
         try:
-            subprocess.run([ZSTD_EXE, "-t", str(p)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            run_quiet([ZSTD_EXE, "-t", str(p)], check=True, capture=True, cancel_event=cancel_event)
         except subprocess.CalledProcessError:
             bad.append(p.name)
     if bad:
@@ -141,3 +147,25 @@ def verify_patch_files() -> bool:
         return False
     print("all patches OK")
     return True
+
+def _tqdm_file():
+    """
+    Return a file-like object for tqdm to write to.
+    In GUI builds, sys.stderr may be None; fall back to a sink.
+    """
+    f = getattr(sys, "stderr", None)
+    return f if (f is not None and hasattr(f, "write")) else io.StringIO()
+
+def _tqdm_disable():
+    """
+    Disable tqdm when there is no real stderr (GUI build) or when explicitly requested.
+    Env override: SIERRA_TQDM=0 forces enable, =1 forces disable.
+    """
+    env = os.environ.get("SIERRA_TQDM")
+    if env == "0":
+        return False
+    if env == "1":
+        return True
+    f = getattr(sys, "stderr", None)
+    return not (f is not None and hasattr(f, "write"))
+

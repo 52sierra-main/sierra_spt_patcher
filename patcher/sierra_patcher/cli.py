@@ -3,7 +3,7 @@ import argparse, os
 from pathlib import Path
 import time
 
-from .paths import OUTPUT_DIR, PATCH_DIR, MISSING_DIR, STORAGE_DIR
+from .paths import OUTPUT_DIR, PATCH_out_DIR, MISSING_out_DIR, STORAGE_out_DIR, PATCH_read_DIR,MISSING_read_DIR,STORAGE_read_DIR
 from .system import check_resources, optimal_threads
 from .registry import query_install, exe_version
 from .metadata import Meta, stamp_from_game_exe
@@ -12,9 +12,11 @@ from .zstd_patch import generate_patches, apply_all_patches, verify_patch_files
 from .delete_list import build_delete_list, finalize
 from .prereqs import ensure_prereqs
 
-_DEF_DELETE_LIST = str(Path(STORAGE_DIR) / "delete_list.txt")
-_DEF_INFO_PATH   = str(Path(STORAGE_DIR) / "metadata.info")
+_DEF_DELETE_LIST_out = str(Path(STORAGE_out_DIR) / "delete_list.txt")
+_DEF_INFO_PATH_out   = str(Path(STORAGE_out_DIR) / "metadata.info")
 
+_DEF_DELETE_LIST_read = str(Path(STORAGE_read_DIR) / "delete_list.txt")
+_DEF_INFO_PATH_read   = str(Path(STORAGE_read_DIR) / "metadata.info")
 
 def _cmd_generate(args: argparse.Namespace) -> None:
     source = args.source
@@ -22,23 +24,23 @@ def _cmd_generate(args: argparse.Namespace) -> None:
     if not source or not dest:
         raise SystemExit("Missing --source/--dest. Run with --help for usage.")
 
-    os.makedirs(PATCH_DIR, exist_ok=True)
-    os.makedirs(MISSING_DIR, exist_ok=True)
-    os.makedirs(STORAGE_DIR, exist_ok=True)
+    os.makedirs(PATCH_out_DIR, exist_ok=True)
+    os.makedirs(MISSING_out_DIR, exist_ok=True)
+    os.makedirs(STORAGE_out_DIR, exist_ok=True)
 
     check_resources()
     threads = args.threads or optimal_threads()
 
     print("Creating ZSTD patches...")
-    generate_patches(source, dest, PATCH_DIR, MISSING_DIR, workers=threads)
-    pack_additional(MISSING_DIR, STORAGE_DIR)
+    generate_patches(source, dest, PATCH_out_DIR, MISSING_out_DIR, workers=threads)
+    pack_additional(MISSING_out_DIR, STORAGE_out_DIR)
 
     print("Building delete list...")
-    build_delete_list(source, dest, _DEF_DELETE_LIST)
+    build_delete_list(source, dest, _DEF_DELETE_LIST_out)
 
     if args.title and args.date:
         print("Stamping metadata...")
-        stamp_from_game_exe(_DEF_INFO_PATH, source, args.title, args.date)
+        stamp_from_game_exe(_DEF_INFO_PATH_out, source, args.title, args.date)
     else:
         print("Skipping metadata stamp (no --title/--date provided)")
 
@@ -48,7 +50,7 @@ def _cmd_generate(args: argparse.Namespace) -> None:
 
 
 def _cmd_install(args: argparse.Namespace) -> None:
-    meta = Meta.read(STORAGE_DIR)
+    meta = Meta.read(STORAGE_read_DIR)
     print("Patcher metadata:")
     print(" Version     ", meta.version)
     print(" Release     ", meta.title)
@@ -58,10 +60,10 @@ def _cmd_install(args: argparse.Namespace) -> None:
     if not inst:
         raise SystemExit("Tarkov installation not found.")
     print("Tarkov install:")
-    print(" Path     ", inst.install_path)
+    print(" Path     ", inst["install_path"])
 
     if not args.force:
-        exe = Path(inst.install_path, "EscapeFromTarkov.exe")
+        exe = Path(inst["install_path"], "EscapeFromTarkov.exe")
         if exe_version(str(exe)) != meta.version:
             print("Warning, live client status mismatch metadata.")
             time.sleep(1)
@@ -76,8 +78,8 @@ def _cmd_install(args: argparse.Namespace) -> None:
     print("Applying patches...")
     ok = apply_all_patches(dest, workers=threads)
     print("Finalizing...")
-    finalize(dest, _DEF_DELETE_LIST)
-    apply_storage(STORAGE_DIR, dest)
+    finalize(dest, _DEF_DELETE_LIST_read)
+    apply_storage(STORAGE_read_DIR, dest)
 
     if args.prereqs:
         ensure_prereqs(interactive=not args.yes)
