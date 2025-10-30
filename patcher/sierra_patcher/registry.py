@@ -1,4 +1,5 @@
-import winreg, win32api
+import winreg
+import win32api
 from pathlib import Path
 
 _UNINSTALL_KEY = (r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
