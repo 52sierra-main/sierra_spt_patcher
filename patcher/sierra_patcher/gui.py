@@ -1,7 +1,7 @@
 from __future__ import annotations
 import os, ctypes, datetime as _dt, threading
 import tkinter as tk
-import os, shutil, platform
+import os, shutil, platform, sys
 import psutil
 import cpuinfo
 import traceback
@@ -10,6 +10,7 @@ import webbrowser
 from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 
+from .utils import  rename_output_folder, copy_self_to_output, open_url, copy_to_clipboard
 from .paths import OUTPUT_DIR, PATCH_out_DIR, MISSING_out_DIR, STORAGE_out_DIR, PATCH_read_DIR,MISSING_read_DIR,STORAGE_read_DIR, APP_ROOT, TITLE
 from .system import check_resources, optimal_threads
 from .registry import query_install, exe_version
@@ -34,21 +35,6 @@ def _hide_console_on_windows():
         pass
 
 # ---- helpers----
-
-def open_url(url: str):
-    try:
-        webbrowser.open(url, new=2)
-    except Exception as e:
-        messagebox.showerror("Open link", f"Failed to open link:\n{e}")
-
-def copy_to_clipboard(root, text: str, toast: bool = True):
-    try:
-        root.clipboard_clear()
-        root.clipboard_append(text)
-        if toast:
-            messagebox.showinfo("Copied", "Copied to clipboard.")
-    except Exception:
-        pass
 
 def _safe_call(widget, func, *args, **kwargs):
     """Run func on Tk main thread."""
@@ -171,7 +157,6 @@ class SierraPatcherGUI(tk.Tk):
         else:
             self.btn_install.state(["disabled"])
 
-    
     def _status_row(self, parent, r, c, label, var: tk.StringVar):
         frm = ttk.Frame(parent)
         frm.grid(row=r, column=c, sticky="ew", padx=8, pady=2)
@@ -236,7 +221,6 @@ class SierraPatcherGUI(tk.Tk):
             self._stat["pat_version"].set("—")
             self._stat["pat_title"].set("—")
         try:
-            from .zstd_patch import count_patch_files
             self._stat["pat_patches"].set(str(count_patch_files()))
         except Exception:
             self._stat["pat_patches"].set("—")
@@ -615,6 +599,14 @@ class SierraPatcherGUI(tk.Tk):
                 verify_patch_files(cancel_event=self._cancel)
                 self._step_prog("verification complete")
 
+                copy_self_to_output(OUTPUT_DIR, self._log)
+
+                # Assume: title is your SPT version string from the form/metadata
+                #         src_root is the “clean game” folder entered by the user
+                live_exe = os.path.join(src, "EscapeFromTarkov.exe")
+                _ = rename_output_folder(OUTPUT_DIR, spt_version=title, live_client_exe=live_exe, log=self._log)
+
+
                 self._set_phase("Done")
                 self._log("[generate] done")
                 _safe_call(self, messagebox.showinfo, "Generate", f"Patch package ready in:\n{OUTPUT_DIR}")
@@ -623,6 +615,10 @@ class SierraPatcherGUI(tk.Tk):
                 self._log("[generate] cancelled by user")
                 return
             except Exception:
+                if self._cancel.is_set():
+                    # user cancelled; don’t spam a failure dialog
+                    self._set_phase("Cancelled")
+                    self._log("[generate] cancelled during operation")
                 self._log_exc("[generate] failed")
                 _safe_call(self, messagebox.showerror, "Generate", "Generation failed. See Logs tab for details.")
             finally:
@@ -702,6 +698,10 @@ class SierraPatcherGUI(tk.Tk):
                 self._log("[install] cancelled by user")
                 return
             except Exception:
+                if self._cancel.is_set():
+                    # user cancelled; don’t spam a failure dialog
+                    self._set_phase("Cancelled")
+                    self._log("[generate] cancelled during operation")
                 self._log_exc("[install] failed")
                 _safe_call(self, messagebox.showerror, "Install", "Install failed. See Logs tab for details.")
             finally:

@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 from .proc import run_quiet
 import sys, io
-from .paths import ZSTD_EXE, PATCH_DIR
+from .paths import ZSTD_EXE, PATCH_out_DIR, PATCH_read_DIR
 
 # Optional progress callback signature:
 #   on_progress(phase: str, current: int, total: int, message: str)
@@ -73,7 +73,7 @@ def generate_patches(source_root: str, dest_root: str, out_root: str, missing_ro
 # ----- INSTALLER -----
 
 def _apply_single(patch_file: Path, dest_dir: Path, cancel_event=None) -> bool:
-    rel = patch_file.relative_to(PATCH_DIR).with_suffix("")
+    rel = patch_file.relative_to(PATCH_read_DIR).with_suffix("")
     old_file = dest_dir / rel
     if not old_file.exists():
         tqdm.write(f"missing target: {rel}")
@@ -95,7 +95,7 @@ def _apply_single(patch_file: Path, dest_dir: Path, cancel_event=None) -> bool:
 
 def apply_all_patches(dest_dir: str, workers: int = 8, on_progress=None, cancel_event=None, use_tqdm=True) -> tuple[int, int, int]:
     """Apply all patches; returns (total, succeeded, failed)."""
-    zstd_files = list(Path(PATCH_DIR).rglob("*.zst"))
+    zstd_files = list(Path(PATCH_read_DIR).rglob("*.zst"))
     total = len(zstd_files)
     if not zstd_files:
         print("No .zst patches found.")
@@ -132,11 +132,11 @@ def count_dest_files(dest_root: str) -> int:
     return c
 
 def count_patch_files() -> int:
-    return sum(1 for _ in Path(PATCH_DIR).rglob("*.zst"))
+    return sum(1 for _ in Path(PATCH_read_DIR).rglob("*.zst"))
 
 def verify_patch_files(cancel_event=None) -> bool:
     bad = []
-    for p in Path(PATCH_DIR).rglob("*.zst"):
+    for p in Path(PATCH_out_DIR).rglob("*.zst"):
         try:
             run_quiet([ZSTD_EXE, "-t", str(p)], check=True, capture=True, cancel_event=cancel_event)
         except subprocess.CalledProcessError:
