@@ -134,13 +134,25 @@ def count_dest_files(dest_root: str) -> int:
 def count_patch_files() -> int:
     return sum(1 for _ in Path(PATCH_read_DIR).rglob("*.zst"))
 
-def verify_patch_files(cancel_event=None) -> bool:
+def verify_patch_files(cancel_event=None, on_progress=None) -> bool:
     bad = []
-    for p in Path(PATCH_out_DIR).rglob("*.zst"):
+    patches = list(Path(PATCH_out_DIR).rglob("*.zst"))
+    total = len(patches)
+    
+    for i, p in enumerate(patches, 1):
+        if cancel_event and cancel_event.is_set():
+            # user cancelled; report where we got to and exit early
+            if on_progress:
+                on_progress("verify:patches", i-1, total, "Cancelled")
+            return False
         try:
-            run_quiet([ZSTD_EXE, "-t", str(p)], check=True, capture=True, cancel_event=cancel_event)
+            run_quiet([ZSTD_EXE, "-t", str(p)],
+                      check=True, capture=True, cancel_event=cancel_event)
         except subprocess.CalledProcessError:
             bad.append(p.name)
+        finally:
+            if on_progress:
+                on_progress("verify:patches", i, total, f"Validating patches {i}/{total}")
     if bad:
         print(f"invalid patches: {len(bad)}")
         for b in bad[:10]: print("  -", b)

@@ -596,7 +596,7 @@ class SierraPatcherGUI(tk.Tk):
                 self._step_prog("metadata stamped")
 
                 self._set_phase("Verifying patches")
-                verify_patch_files(cancel_event=self._cancel)
+                verify_patch_files(cancel_event=self._cancel, on_progress=on_progress)
                 self._step_prog("verification complete")
 
                 copy_self_to_output(OUTPUT_DIR, self._log)
