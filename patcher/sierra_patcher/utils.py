@@ -5,7 +5,7 @@ import webbrowser
 from tkinter import messagebox
 
 def _last_section_from_version(ver: str | None) -> str:
-    """Extract the last '.'-separated numeric section (e.g. '0.16.1.40087' → '40087')."""
+    
     if not ver:
         return "x"
     # Split on dots, strip whitespace, return last non-empty token

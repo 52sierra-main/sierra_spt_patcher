@@ -169,11 +169,35 @@ class SierraPatcherGUI(tk.Tk):
         else:
             self.btn_install.state(["disabled"])
 
-    def _status_row(self, parent, r, c, label, var: tk.StringVar):
-        frm = ttk.Frame(parent)
-        frm.grid(row=r, column=c, sticky="ew", padx=8, pady=2)
-        ttk.Label(frm, text=f"{label}: ", foreground="#666").pack(side="left")
-        ttk.Label(frm, textvariable=var).pack(side="left")
+    def _status_row(self, parent, row: int, col: int, label: str,
+                var: tk.StringVar, kind: str = "text"):
+        ttk.Label(parent, text=label, foreground="#666").grid(row=row, column=col, sticky="w", padx=8)
+
+        if kind == "path":
+            # Read-only single-line field that can horizontally scroll with caret
+            e = ttk.Entry(parent, textvariable=var, state="readonly", takefocus=True, justify="left")
+            e.grid(row=row, column=col, sticky="ew", padx=(80, 8))  # leave space after the label
+            parent.grid_columnconfigure(col, weight=1)
+
+            # Let users set caret with mouse and scroll with wheel (nice UX)
+            def _wheel(ev):
+                # Shift+Wheel scrolls faster
+                step = -5 if ev.delta > 0 else 5
+                e.xview_scroll(step if ev.state & 0x0001 else (1 if step > 0 else -1), "units")
+                return "break"
+            e.bind("<MouseWheel>", _wheel)            # Windows
+            e.bind("<Button-1>", lambda ev: e.icursor("@%d" % ev.x))
+
+            # Quick copy: Ctrl+C (even though it's readonly)
+            e.bind("<Control-c>", lambda _e: (self.clipboard_clear(), self.clipboard_append(var.get())))
+            # Optional: select all on focus for quick copy
+            e.bind("<FocusIn>", lambda _e: e.select_range(0, "end"))
+            return
+
+        # default text (wrap short fields if needed)
+        ttk.Label(parent, textvariable=var, anchor="w", wraplength=240)\
+            .grid(row=row, column=col, sticky="w", padx=(80, 8))
+
 
     def _browse_and_refresh(self, entry: ttk.Entry):
         d = filedialog.askdirectory(title="Select folder")
@@ -335,8 +359,10 @@ class SierraPatcherGUI(tk.Tk):
         # ---- Status panel -------------------------------------------------------
         card = ttk.LabelFrame(f, text="Status")
         card.grid(row=5, column=0, columnspan=3, sticky="ew", padx=10, pady=(8, 0))
-        for c in range(4):
-            card.columnconfigure(c, weight=1)
+        card.columnconfigure(0, weight=1)   # System
+        card.columnconfigure(1, weight=2)   # Patcher
+        card.columnconfigure(2, weight=1)   # Tarkov (wider)
+        card.columnconfigure(3, weight=1)   # Destination
 
         # Section headers
         ttk.Label(card, text="System", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", padx=8, pady=(8,2))
@@ -353,7 +379,7 @@ class SierraPatcherGUI(tk.Tk):
         ]}
 
         # System
-        self._status_row(card, 1, 0, "CPU",       self._stat["sys_cpu"])
+        self._status_row(card, 1, 0, "CPU",       self._stat["sys_cpu"], kind="path")
         self._status_row(card, 2, 0, "Cores",     self._stat["sys_cores"])
         self._status_row(card, 3, 0, "Memory",    self._stat["sys_ram"])
 
@@ -363,7 +389,7 @@ class SierraPatcherGUI(tk.Tk):
         self._status_row(card, 3, 1, "Patch files", self._stat["pat_patches"])
 
         # Tarkov
-        self._status_row(card, 1, 2, "Path",      self._stat["tk_path"])
+        self._status_row(card, 1, 2, "Path",      self._stat["tk_path"],kind="path")
         self._status_row(card, 2, 2, "Version",   self._stat["tk_version"])
         self._status_row(card, 3, 2, "Publisher", self._stat["tk_publisher"])
 
