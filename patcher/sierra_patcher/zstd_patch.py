@@ -134,31 +134,76 @@ def count_dest_files(dest_root: str) -> int:
 def count_patch_files() -> int:
     return sum(1 for _ in Path(PATCH_read_DIR).rglob("*.zst"))
 
-def verify_patch_files(cancel_event=None, on_progress=None) -> bool:
-    bad = []
+def _verify_single(patch_path: Path, cancel_event=None) -> tuple[bool, Path]:
+    """
+    Verify a single .zst patch file with zstd -t.
+    Returns (ok, patch_path).
+    """
+    try:
+        # Per-process threads=1 to avoid CPU oversubscription when parallelized
+        run_quiet([ZSTD_EXE, "-t", str(patch_path), "-T1"],
+                  check=True, capture=True, cancel_event=cancel_event)
+        return True, patch_path
+    except subprocess.CalledProcessError:
+        return False, patch_path
+
+def verify_patch_files(cancel_event=None, on_progress=None,
+                       workers: int | None = None,
+                       fast_fail: int = 0) -> bool:
+    """
+    Parallel verification of all .zst patches under PATCH_out_DIR.
+    - Calls _verify_single(...) in a thread pool.
+    - Reports ABSOLUTE progress via on_progress("verify:patches", done, total, msg).
+    - Respects cancel_event. If fast_fail>0, cancels after that many failures.
+    """
     patches = list(Path(PATCH_out_DIR).rglob("*.zst"))
     total = len(patches)
-    
-    for i, p in enumerate(patches, 1):
-        if cancel_event and cancel_event.is_set():
-            # user cancelled; report where we got to and exit early
-            if on_progress:
-                on_progress("verify:patches", i-1, total, "Cancelled")
-            return False
-        try:
-            run_quiet([ZSTD_EXE, "-t", str(p)],
-                      check=True, capture=True, cancel_event=cancel_event)
-        except subprocess.CalledProcessError:
-            bad.append(p.name)
-        finally:
-            if on_progress:
-                on_progress("verify:patches", i, total, f"Validating patches {i}/{total}")
+    if total == 0:
+        if on_progress:
+            on_progress("verify:patches", 0, 0, "No patches to verify")
+        print("all patches OK (none found)")
+        return True
+
+    # Good default: min(32, max(4, cpu_count))
+    max_workers = workers or min(32, max(4, (os.cpu_count() or 4)))
+
+    bad: list[str] = []
+    done = 0
+    lock = threading.Lock()
+
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futs = {ex.submit(_verify_single, p, cancel_event): p for p in patches}
+        for fut in as_completed(futs):
+            # cooperative cancel
+            if cancel_event and cancel_event.is_set():
+                break
+
+            ok, p = fut.result()
+
+            with lock:
+                done += 1
+                if not ok:
+                    bad.append(p.name)
+                    if fast_fail and len(bad) >= fast_fail and cancel_event:
+                        cancel_event.set()   # trigger cooperative stop
+
+                if on_progress:
+                    on_progress("verify:patches", done, total, f"Validating patches {done}/{total}")
+
+    # If user cancelled, treat as failure only when fast-fail threshold hit
+    if cancel_event and cancel_event.is_set() and fast_fail and len(bad) >= fast_fail:
+        print(f"stopped after {len(bad)} failures (fast-fail)")
+        return False
+
     if bad:
         print(f"invalid patches: {len(bad)}")
-        for b in bad[:10]: print("  -", b)
+        for b in bad[:10]:
+            print("  -", b)
         return False
+
     print("all patches OK")
     return True
+
 
 def _tqdm_file():
     """
