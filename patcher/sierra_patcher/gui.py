@@ -99,6 +99,18 @@ class SierraPatcherGUI(tk.Tk):
             self.iconbitmap(icon_path)
 
     # ---------- Shared progress helpers ----------
+    def _phase_progress(self, current: int | float, total: int | float, message: str = ""):
+        """Set progress bar to an absolute position (current/total) and update detail text."""
+        def _do():
+            tot = max(1, int(total))
+            cur = max(0, min(int(current), tot))
+            self._prog_bar.configure(mode="determinate", maximum=tot, value=cur)
+            if message:
+                self._detail_var.set(message)
+            self._prog_bar.update_idletasks()
+        _safe_call(self, _do)
+
+    
     def _reset_prog(self, total: int, phase: str):
         def _do():
             self._total_var = max(1, total)
@@ -569,56 +581,68 @@ class SierraPatcherGUI(tk.Tk):
                     os.makedirs(d, exist_ok=True)
 
                 self._log("[generate] start")
-                # basic sanity: tools present?
                 from .paths import ZSTD_EXE
                 if not os.path.isfile(ZSTD_EXE):
                     raise RuntimeError(f"zstd not found at: {ZSTD_EXE}")
 
-                # Patching phase
-                generate_patches(src, dst, PATCH_out_DIR, MISSING_out_DIR, workers=threads,
-                                on_progress=on_progress, cancel_event=self._cancel, use_tqdm=False)
+                # Phase 1: generate patches (zstd)
+                total_files = count_dest_files(dst)
+                self._set_phase("Generating patches")
+                self._reset_prog(total_files, "Generating patches")
+                generate_patches(
+                    src, dst, PATCH_out_DIR, MISSING_out_DIR,
+                    workers=threads,
+                    on_progress=lambda _p, i, n, msg: self._phase_progress(i, n, msg),
+                    cancel_event=self._cancel,
+                    use_tqdm=False,
+                )
                 if self._cancel.is_set():
-                    self._set_phase("Cancelled")
-                    self._log("[generate] cancelled")
-                    return
-                self._done_var = total_files
+                    self._set_phase("Cancelled"); self._log("[generate] cancelled"); return
 
+                # Phase 2: pack additional files (7-Zip %)
                 self._set_phase("Packing additional files")
-                pack_additional(MISSING_out_DIR, STORAGE_out_DIR, cancel_event=self._cancel)
-                self._step_prog("additional files packed")
+                self._reset_prog(100, "Packing additional files")
+                pack_additional(
+                    MISSING_out_DIR, STORAGE_out_DIR,
+                    cancel_event=self._cancel,
+                    on_progress=lambda _p, cur, tot, msg: self._phase_progress(cur, tot, msg),
+                )
 
+                # Phase 3: build delete list (single step)
                 self._set_phase("Building delete list")
+                self._reset_prog(1, "Building delete list")
                 build_delete_list(src, dst, os.path.join(STORAGE_out_DIR, "delete_list.txt"))
-                self._step_prog("delete list written")
+                self._phase_progress(1, 1, "delete list written")
 
+                # Phase 4: stamp metadata (single step)
                 self._set_phase("Stamping metadata")
+                self._reset_prog(1, "Stamping metadata")
                 stamp_from_game_exe(os.path.join(STORAGE_out_DIR, "metadata.info"), src, title, date)
-                self._step_prog("metadata stamped")
+                self._phase_progress(1, 1, "metadata stamped")
 
+                # Phase 5: verify patches (absolute count)
+                total_patches = count_patch_files()
                 self._set_phase("Verifying patches")
-                verify_patch_files(cancel_event=self._cancel, on_progress=on_progress)
-                self._step_prog("verification complete")
+                self._reset_prog(total_patches, "Verifying patches")
+                verify_patch_files(
+                    cancel_event=self._cancel,
+                    on_progress=lambda _p, i, n, msg: self._phase_progress(i, n, msg),
+                )
 
+                # Finalize: copy self & rename
                 copy_self_to_output(OUTPUT_DIR, self._log)
-
-                # Assume: title is your SPT version string from the form/metadata
-                #         src_root is the “clean game” folder entered by the user
                 live_exe = os.path.join(src, "EscapeFromTarkov.exe")
-                _ = rename_output_folder(OUTPUT_DIR, spt_version=title, live_client_exe=live_exe, log=self._log)
-
+                final_dir = rename_output_folder(OUTPUT_DIR, spt_version=title, live_client_exe=live_exe, log=self._log) or OUTPUT_DIR
 
                 self._set_phase("Done")
                 self._log("[generate] done")
-                _safe_call(self, messagebox.showinfo, "Generate", f"Patch package ready in:\n{OUTPUT_DIR}")
+                _safe_call(self, messagebox.showinfo, "Generate", f"Patch package ready in:\n{final_dir}")
+
             except proc.Cancelled:
-                self._set_phase("Cancelled")
-                self._log("[generate] cancelled by user")
-                return
+                self._set_phase("Cancelled"); self._log("[generate] cancelled by user")
             except Exception:
                 if self._cancel.is_set():
-                    # user cancelled; don’t spam a failure dialog
-                    self._set_phase("Cancelled")
-                    self._log("[generate] cancelled during operation")
+                    self._set_phase("Cancelled"); self._log("[generate] cancelled during operation"); return
                 self._log_exc("[generate] failed")
                 _safe_call(self, messagebox.showerror, "Generate", "Generation failed. See Logs tab for details.")
             finally:
@@ -659,7 +683,7 @@ class SierraPatcherGUI(tk.Tk):
                     raise RuntimeError(f"zstd not found at: {ZSTD_EXE}")
 
                 meta = Meta.read(STORAGE_read_DIR)
-                inst = query_install()  # now dict; keep it that way consistently
+                inst = query_install()
                 if not inst:
                     raise RuntimeError("Tarkov installation not found (registry).")
 
@@ -669,44 +693,56 @@ class SierraPatcherGUI(tk.Tk):
                     if meta.version and ver_now != meta.version:
                         raise RuntimeError(f"Live Tarkov version {ver_now} != target {meta.version}")
 
-                apply_all_patches(dst, workers=threads, on_progress=on_progress,
-                              cancel_event=self._cancel, use_tqdm=False)
+                # Phase 1: apply patches (absolute count)
+                total_patches = count_patch_files()
+                self._set_phase("Applying patches")
+                self._reset_prog(total_patches, "Applying patches")
+                apply_all_patches(
+                    dst,
+                    workers=threads,
+                    on_progress=lambda _p, i, n, msg: self._phase_progress(i, n, msg),
+                    cancel_event=self._cancel,
+                    use_tqdm=False,
+                )
                 if self._cancel.is_set():
-                    self._set_phase("Cancelled")
-                    self._log("[install] cancelled")
-                    return
-                self._done_var = total_patches
+                    self._set_phase("Cancelled"); self._log("[install] cancelled"); return
 
+                # Phase 2: finalize (delete list, single step)
                 self._set_phase("Finalizing (delete list)")
+                self._reset_prog(1, "Finalizing")
                 finalize(dst, os.path.join(STORAGE_read_DIR, "delete_list.txt"))
-                self._step_prog("cleanup done")
+                self._phase_progress(1, 1, "cleanup done")
 
+                # Phase 3: apply storage (7-Zip %)
                 self._set_phase("Applying storage")
-                apply_storage(STORAGE_read_DIR, dst, cancel_event=self._cancel)
-                self._step_prog("storage applied")
+                self._reset_prog(100, "Applying storage")
+                apply_storage(
+                    STORAGE_read_DIR, dst,
+                    cancel_event=self._cancel,
+                    on_progress=lambda _p, cur, tot, msg: self._phase_progress(cur, tot, msg),
+                )
 
+                # Phase 4: prerequisites (optional, single step)
                 if prereq:
                     self._set_phase("Installing .NET prerequisites")
+                    self._reset_prog(1, "Installing prerequisites")
                     ensure_prereqs(interactive=False)
-                    self._step_prog("prereqs installed")
+                    self._phase_progress(1, 1, "prereqs installed")
 
                 self._set_phase("Done")
                 self._log("[install] done")
                 _safe_call(self, messagebox.showinfo, "Install", "Patch applied successfully.")
             except proc.Cancelled:
-                self._set_phase("Cancelled")
-                self._log("[install] cancelled by user")
-                return
+                self._set_phase("Cancelled"); self._log("[install] cancelled by user")
             except Exception:
                 if self._cancel.is_set():
-                    # user cancelled; don’t spam a failure dialog
-                    self._set_phase("Cancelled")
-                    self._log("[generate] cancelled during operation")
+                    self._set_phase("Cancelled"); self._log("[install] cancelled during operation"); return
                 self._log_exc("[install] failed")
                 _safe_call(self, messagebox.showerror, "Install", "Install failed. See Logs tab for details.")
             finally:
                 proc.kill_all()
                 _safe_call(self, self.btn_abort_ins.state, ["disabled"])
+
 
         threading.Thread(target=worker, daemon=True).start()
 
