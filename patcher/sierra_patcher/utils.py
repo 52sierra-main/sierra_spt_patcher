@@ -4,19 +4,20 @@ from .registry import exe_version  # already in your codebase
 import webbrowser
 from tkinter import messagebox
 
-def _last_digit_from_version(ver: str | None) -> str:
-    """Extract the last numeric digit from a version string; fallback 'x'."""
+def _last_section_from_version(ver: str | None) -> str:
+    """Extract the last '.'-separated numeric section (e.g. '0.16.1.40087' → '40087')."""
     if not ver:
         return "x"
-    digits = re.findall(r"\d", ver)
-    return digits[-1] if digits else "x"
+    # Split on dots, strip whitespace, return last non-empty token
+    parts = [p.strip() for p in ver.split(".") if p.strip()]
+    return parts[-1] if parts else "x"
 
 def rename_output_folder(output_dir: str, spt_version: str, live_client_exe: str, log) -> str | None:
     """
     Rename output_dir to '<spt_version>_<lastdigit>_'. Returns new path or None on failure.
     """
     try:
-        last = _last_digit_from_version(exe_version(live_client_exe))
+        last = _last_section_from_version(exe_version(live_client_exe))
         # sanitize spt_version for folder name
         safe_spt = re.sub(r"[^A-Za-z0-9._-]+", "-", (spt_version or "spt")).strip("-")
         base = f"{safe_spt}_{last}_"
