@@ -150,6 +150,13 @@ class SierraPatcherGUI(tk.Tk):
         except Exception:
             pass
 
+    def _stop_with_message(self, title: str, text: str):
+        """Stop the current worker gracefully and show a custom message."""
+        self._cancel.set()                         # co-operative stop
+        self._set_phase("Stopped")
+        self._phase_progress(0, 1, "")             # empty the bar
+        _safe_call(self, messagebox.showwarning, title, text)
+
 
     # ---------- tab helpers ----------
 
@@ -665,7 +672,8 @@ class SierraPatcherGUI(tk.Tk):
                 _safe_call(self, messagebox.showinfo, "Generate", f"Patch package ready in:\n{final_dir}")
 
             except proc.Cancelled:
-                self._set_phase("Cancelled"); self._log("[generate] cancelled by user")
+                self._phase_progress(1, 1, "Cancelled")
+                self._log("[generate] cancelled by user")
             except Exception:
                 if self._cancel.is_set():
                     self._set_phase("Cancelled"); self._log("[generate] cancelled during operation"); return
@@ -717,7 +725,17 @@ class SierraPatcherGUI(tk.Tk):
                     exe = os.path.join(inst["install_path"], "EscapeFromTarkov.exe")
                     ver_now = exe_version(exe) or "-"
                     if meta.version and ver_now != meta.version:
-                        raise RuntimeError(f"Live Tarkov version {ver_now} != target {meta.version}")
+                        msg = (
+                            "Version mismatch detected.\n\n"
+                            f"Live client: {ver_now}\n"
+                            f"Expected:    {meta.version}\n\n"
+                            "Please select the correct Tarkov folder or enable "
+                            "'Force (bypass metadata checks)' if you know what you're doing."
+                        )
+                        self._log(f"[install] stopped: version mismatch (live={ver_now}, expected={meta.version})")
+                        self._stop_with_message("Version mismatch", msg)
+                        return  # ← important: exit worker without throwing
+
 
                 # Phase 1: apply patches (absolute count)
                 total_patches = count_patch_files()
@@ -759,7 +777,8 @@ class SierraPatcherGUI(tk.Tk):
                 self._log("[install] done")
                 _safe_call(self, messagebox.showinfo, "Install", "Patch applied successfully.")
             except proc.Cancelled:
-                self._set_phase("Cancelled"); self._log("[install] cancelled by user")
+                self._phase_progress(1, 1, "Cancelled")
+                self._log("[install] cancelled by user")
             except Exception:
                 if self._cancel.is_set():
                     self._set_phase("Cancelled"); self._log("[install] cancelled during operation"); return
