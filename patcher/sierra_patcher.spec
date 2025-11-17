@@ -81,7 +81,6 @@ exe = EXE(
     a.datas,
     [],
     name='sierra-patcher',
-    version=0.1.0,
     icon=icon_path,          # None if not found
     console=False,            # keep console for CLI; GUI hides it at runtime
     debug=False,
