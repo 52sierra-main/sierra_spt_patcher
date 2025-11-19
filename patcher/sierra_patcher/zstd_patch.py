@@ -11,6 +11,31 @@ from .paths import ZSTD_EXE, PATCH_out_DIR, PATCH_read_DIR
 
 # ----- GENERATOR -----
 
+try:
+    from tqdm import tqdm
+    _HAVE_TQDM = True
+except Exception:
+    tqdm = None
+    _HAVE_TQDM = False
+
+def _log(msg: str):
+    """
+    Safe log function:
+    - Prefer tqdm.write if available and working.
+    - Fallback to plain print, even if sys.stderr is None.
+    """
+    if _HAVE_TQDM:
+        try:
+            tqdm.write(msg)
+            return
+        except Exception:
+            pass
+    # Fallback: print to stderr if possible, else stdout
+    if getattr(sys, "stderr", None) is not None:
+        print(msg, file=sys.stderr)
+    else:
+        print(msg)
+
 def process_file(source_root: str, dest_root: str, dest_file: str, out_root: str, missing_root: str,cancel_event=None) -> None:
     rel = os.path.relpath(dest_file, dest_root)
     src = os.path.join(source_root, rel)
@@ -76,7 +101,7 @@ def _apply_single(patch_file: Path, dest_dir: Path, cancel_event=None) -> bool:
     rel = patch_file.relative_to(PATCH_read_DIR).with_suffix("")
     old_file = dest_dir / rel
     if not old_file.exists():
-        tqdm.write(f"missing target: {rel}")
+        _log(f"missing target: {rel}")
         return False
     tmp = old_file.with_suffix(old_file.suffix + ".new")
     try:
@@ -88,8 +113,9 @@ def _apply_single(patch_file: Path, dest_dir: Path, cancel_event=None) -> bool:
         os.replace(tmp, old_file)
         return True
     except subprocess.CalledProcessError as e:
-        if tmp.exists(): tmp.unlink()
-        tqdm.write(f"error patching {rel}: {e.stderr.strip() if e.stderr else e}")
+        if tmp.exists():
+            tmp.unlink()
+        _log(f"error patching {rel}: {e.stderr.strip() if e.stderr else e}")
         return False
 
 
