@@ -10,7 +10,7 @@ import webbrowser
 from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 
-from .utils import  rename_output_folder, copy_self_to_output, open_url, copy_to_clipboard
+from .utils import  rename_output_folder, copy_self_to_output, open_url, copy_to_clipboard, folder_size, format_bytes, summarize_integrity_list
 from .paths import OUTPUT_DIR, PATCH_out_DIR, MISSING_out_DIR, STORAGE_out_DIR, PATCH_read_DIR,MISSING_read_DIR,STORAGE_read_DIR, APP_ROOT, TITLE
 from .system import check_resources, optimal_threads
 from .registry import query_install, exe_version
@@ -231,6 +231,11 @@ class SierraPatcherGUI(tk.Tk):
     def _format_bytes(self, n: int) -> str:
         # GiB with one decimal
         return f"{n / (1024**3):.1f} GiB"
+    
+    def _update_integrity_label(self):
+        self.g_integrity_var.set(
+            summarize_integrity_list(self.g_integrity_folders)
+        )
 
     def _refresh_status(self):
         # --- System ---
@@ -311,17 +316,73 @@ class SierraPatcherGUI(tk.Tk):
         self.g_threads.delete(0, tk.END)
         self.g_threads.insert(0, str(optimal_threads()))
 
-        self._row(f, 0, "Source (clean game)", self.g_source, browse=lambda: self._browse(self.g_source))
-        self._row(f, 1, "Target (SPT installation)", self.g_dest, browse=lambda: self._browse(self.g_dest))
+        self._row(f, 0, "Source (clean game)", self.g_source,
+                    browse=lambda: self._browse(self.g_source))
+        self._row(f, 1, "Target (SPT installation)", self.g_dest,
+                    browse=lambda: self._browse(self.g_dest))
         self._row(f, 2, "Release title", self.g_title)
         self._row(f, 3, "Date", self.g_date)
         self._row(f, 4, "Threads", self.g_threads)
 
+        # --- Integrity check folders ----------------------------------------
+        self.g_integrity_folders: list[str] = [] # type: ignore
+        self.g_integrity_var = tk.StringVar(value="Tracked folders: (none)")
+
+        card = ttk.LabelFrame(f, text="Integrity check folders")
+        card.grid(row=5, column=0, columnspan=3, sticky="ew",
+                      padx=12, pady=(6, 4))
+        card.columnconfigure(0, weight=1)
+
+        ttk.Label(card, textvariable=self.g_integrity_var, anchor="w")\
+                .grid(row=0, column=0, columnspan=2, sticky="ew",
+                      padx=4, pady=(2, 4))
+
+        def add_folder():
+            src = Path(self.g_source.get().strip())
+            if not src.is_dir():
+                messagebox.showwarning(
+                    "Source required",
+                    "Select a valid Source (clean game) folder first.",
+                )
+                return
+            folder = filedialog.askdirectory(
+                initialdir=src,
+                title="Choose folder to track (inside Source)",
+            )
+            if not folder:
+                return
+            folder = Path(folder)
+            try:
+                rel = folder.relative_to(src)
+            except ValueError:
+                messagebox.showwarning(
+                    "Invalid folder",
+                    "Please choose a folder inside the Source directory.",
+                )
+                return
+            rel_str = str(rel).replace("\\", "/")
+            if rel_str not in self.g_integrity_folders:
+                self.g_integrity_folders.append(rel_str)
+            self._update_integrity_label()
+
+        def clear_folders():
+            self.g_integrity_folders.clear()
+            self._update_integrity_label()
+
+        ttk.Button(card, text="Add folder...", command=add_folder)\
+            .grid(row=1, column=0, sticky="w", padx=4, pady=(0, 4))
+        ttk.Button(card, text="Clear", command=clear_folders)\
+            .grid(row=1, column=1, sticky="w", padx=4, pady=(0, 4))
+
         # Generate button inside Generate tab
-        ttk.Button(f, text="Generate patch package", command=self._run_generate).grid(row=5, column=0, columnspan=3, pady=(6, 8), padx=12, sticky="w")
-        self.btn_abort_gen = ttk.Button(f, text="Abort", command=self._abort_generate, state="disabled")
-        self.btn_abort_gen.grid(row=5, column=1, padx=6, pady=(6,8), sticky="w")
+        ttk.Button(f, text="Generate patch package", command=self._run_generate)\
+            .grid(row=6, column=0, columnspan=3, pady=(6, 8), padx=12, sticky="w")
+        self.btn_abort_gen = ttk.Button(
+            f, text="Abort", command=self._abort_generate, state="disabled"
+        )
+        self.btn_abort_gen.grid(row=6, column=1, padx=6, pady=(6, 8), sticky="w")
         return f
+
 
     def _build_install_tab(self, nb) -> ttk.Frame:
         f = ttk.Frame(nb)
@@ -650,7 +711,20 @@ class SierraPatcherGUI(tk.Tk):
                 # Phase 4: stamp metadata (single step)
                 self._set_phase("Stamping metadata")
                 self._reset_prog(1, "Stamping metadata")
-                stamp_from_game_exe(os.path.join(STORAGE_out_DIR, "metadata.info"), src, title, date)
+
+                # Build integrity_folders mapping: { "relative/path": size_in_bytes }
+                src_path = Path(src)
+                integrity: dict[str, int] = {}
+                for rel in getattr(self, "g_integrity_folders", []):
+                    integrity[rel] = folder_size(src_path / rel)
+
+                stamp_from_game_exe(
+                    os.path.join(STORAGE_out_DIR, "metadata.info"),
+                    src,
+                    title,
+                    date,
+                    integrity_folders=integrity,
+                )
                 self._phase_progress(1, 1, "metadata stamped")
 
                 # Phase 5: verify patches (absolute count)
@@ -735,6 +809,40 @@ class SierraPatcherGUI(tk.Tk):
                         self._log(f"[install] stopped: version mismatch (live={ver_now}, expected={meta.version})")
                         self._stop_with_message("Version mismatch", msg)
                         return  # ← important: exit worker without throwing
+
+                # --- Integrity folders size check (if present in metadata) ---
+                integrity = getattr(meta, "integrity_folders", None) or {}
+                if integrity and not force:
+                    dst_path = Path(dst)
+                    mismatches: list[tuple[str, int, int]] = []
+
+                    for rel, expected_size in integrity.items():
+                        actual_size = folder_size(dst_path / rel)
+                        if actual_size != expected_size:
+                            mismatches.append((rel, expected_size, actual_size))
+
+                    if mismatches:
+                        lines = []
+                        for rel, exp, act in mismatches:
+                            def _fmt(n: int) -> str:
+                                return f"{n / (1024**3):.2f} GiB ({n:,} bytes)"
+                            lines.append(
+                                f"{rel}:\n"
+                                f"  expected: {_fmt(exp)}\n"
+                                f"  found:    {_fmt(act)}"
+                            )
+                        msg = (
+                            "The selected folder does not match the original source used to "
+                            "build this patch.\n\n"
+                            "One or more tracked subfolders differ in size:\n\n"
+                            + "\n\n".join(lines)
+                            + "\n\nThis usually means the live client version or contents are "
+                            "different from what this patch expects. Please repair/update your "
+                            "client and try again, or use Force only if you know what you're doing."
+                        )
+                        self._log("[install] stopped: integrity folder mismatch")
+                        self._stop_with_message("Folder contents mismatch", msg)
+                        return
 
 
                 # Phase 1: apply patches (absolute count)

@@ -69,4 +69,34 @@ def copy_to_clipboard(root, text: str, toast: bool = True):
             messagebox.showinfo("Copied", "Copied to clipboard.")
     except Exception:
         pass
-    
+    from pathlib import Path
+
+def folder_size(path: Path) -> int:
+    """Return total byte size of all files under 'path' (recursive)."""
+    if not path.is_dir():
+        return 0
+    total = 0
+    for p in path.rglob("*"):
+        if p.is_file():
+            try:
+                total += p.stat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def format_bytes(n: int) -> str:
+    """Human-readable size format, e.g. '2.34 GiB'."""
+    if n < 1024:
+        return f"{n} B"
+    for unit in ["KiB", "MiB", "GiB", "TiB"]:
+        n /= 1024.0
+        if n < 1024:
+            return f"{n:.2f} {unit}"
+    return f"{n:.2f} PiB"
+
+def summarize_integrity_list(lst: list[str]) -> str:
+    if not lst:
+        return "Tracked folders: (none)"
+    return "Tracked folders: " + ", ".join(lst)
+
