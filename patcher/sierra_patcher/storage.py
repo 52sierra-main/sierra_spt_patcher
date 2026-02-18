@@ -53,7 +53,7 @@ def pack_additional(additional_dir: str | Path, storage_dir: str | Path,
     pw = os.environ.get("AF_PASS") or _gen_pass()
     run_quiet(
         [SEVENZIP, "a", "-t7z", str(archive), str(additional_dir / "*"),
-         "-mx9", "-mhe=on", "-mmt=on", "-bsp2", f"-p{pw}"],
+         "-mx0", "-mhe=on", "-mmt=on", "-bsp2", f"-p{pw}"],
         check=True, capture=True, cancel_event=cancel_event,
         on_output=_on_7z_output_factory(on_progress)
     )
