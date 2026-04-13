@@ -24,6 +24,12 @@ from .delete_list import build_delete_list, finalize
 from .prereqs import ensure_prereqs
 from . import proc
 
+DIFF_PRESETS = {
+  "Fast (bigger patches)": ["-3"],
+  "Balanced": ["-10", "--long=27"],
+  "Aggressive (smallest patches)": ["--max", "--long=31"],
+}
+
 # ---- console hider (for GUI when console=True) ----
 
 def _hide_console_on_windows():
@@ -315,6 +321,8 @@ class SierraPatcherGUI(tk.Tk):
         self.g_threads = ttk.Spinbox(f, from_=1, to=64)
         self.g_threads.delete(0, tk.END)
         self.g_threads.insert(0, str(optimal_threads()))
+        self.g_diff_profile = tk.StringVar(value="Balanced")
+        diff_box = ttk.Combobox(f, textvariable=self.g_diff_profile, state="readonly", values=list(DIFF_PRESETS.keys()))
 
         self._row(f, 0, "Source (clean game)", self.g_source,
                     browse=lambda: self._browse(self.g_source))
@@ -323,13 +331,14 @@ class SierraPatcherGUI(tk.Tk):
         self._row(f, 2, "Release title", self.g_title)
         self._row(f, 3, "Date", self.g_date)
         self._row(f, 4, "Threads", self.g_threads)
+        self._row(f, 5, "Diff aggressiveness", diff_box)
 
         # --- Integrity check folders ----------------------------------------
         self.g_integrity_folders: list[str] = [] # type: ignore
         self.g_integrity_var = tk.StringVar(value="Tracked folders: (none)")
 
         card = ttk.LabelFrame(f, text="Integrity check folders")
-        card.grid(row=5, column=0, columnspan=3, sticky="ew",
+        card.grid(row=6, column=0, columnspan=3, sticky="ew",
                       padx=12, pady=(6, 4))
         card.columnconfigure(0, weight=1)
 
@@ -376,11 +385,11 @@ class SierraPatcherGUI(tk.Tk):
 
         # Generate button inside Generate tab
         ttk.Button(f, text="Generate patch package", command=self._run_generate)\
-            .grid(row=6, column=0, columnspan=3, pady=(6, 8), padx=12, sticky="w")
+            .grid(row=7, column=0, columnspan=3, pady=(6, 8), padx=12, sticky="w")
         self.btn_abort_gen = ttk.Button(
             f, text="Abort", command=self._abort_generate, state="disabled"
         )
-        self.btn_abort_gen.grid(row=6, column=1, padx=6, pady=(6, 8), sticky="w")
+        self.btn_abort_gen.grid(row=7, column=1, padx=6, pady=(6, 8), sticky="w")
         return f
 
 
@@ -652,6 +661,8 @@ class SierraPatcherGUI(tk.Tk):
         title = self.g_title.get().strip() or ""
         date = self.g_date.get().strip() or _dt.date.today().isoformat()
         threads = int(self.g_threads.get())
+        profile_label = getattr(self, "g_diff_profile", tk.StringVar(value="Balanced")).get()
+        diff_args = DIFF_PRESETS.get(profile_label, DIFF_PRESETS["Balanced"])
         if not src or not dst:
             messagebox.showerror("Missing folders", "Please set Source and Target folders.")
             return
@@ -686,6 +697,7 @@ class SierraPatcherGUI(tk.Tk):
                 generate_patches(
                     src, dst, PATCH_out_DIR, MISSING_out_DIR,
                     workers=threads,
+                    zstd_args=diff_args,
                     on_progress=lambda _p, i, n, msg: self._phase_progress(i, n, msg),
                     cancel_event=self._cancel,
                     use_tqdm=False,
@@ -724,6 +736,8 @@ class SierraPatcherGUI(tk.Tk):
                     title,
                     date,
                     integrity_folders=integrity,
+                    diff_profile=profile_label,
+                    zstd_patch_args=diff_args,
                 )
                 self._phase_progress(1, 1, "metadata stamped")
 
