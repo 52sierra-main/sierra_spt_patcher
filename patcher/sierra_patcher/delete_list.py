@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-# generator: list files in source that are absent in dest → delete_list.txt
+# generator: list files in source that are absent in dest -> delete_list.txt
 
 def build_delete_list(source_root: str, dest_root: str, out_path: str) -> None:
     items = []

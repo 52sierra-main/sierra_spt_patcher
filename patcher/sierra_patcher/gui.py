@@ -27,7 +27,8 @@ from . import proc
 DIFF_PRESETS = {
   "Fast (bigger patches)": ["-3"],
   "Balanced": ["-10", "--long=27"],
-  "Aggressive (smallest patches)": ["--max", "--long=31"],
+  "Aggressive (smallest patches)": ["--ultra", "-22", "--long=31"],
+  "MAX (experimental)": ["--max", "--long=31"],
 }
 
 # ---- console hider (for GUI when console=True) ----
