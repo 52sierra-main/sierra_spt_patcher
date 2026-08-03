@@ -3,6 +3,8 @@
 #   pyinstaller sierra_patcher.spec
 #
 # Output: dist/sierra-patcher.exe
+# This spec builds the public GUI onefile executable. Patch data stays external
+# beside the exe in patchfiles/ and storage/.
 
 import os
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files
@@ -57,9 +59,6 @@ icon_path = P('sierra_patcher', 'assets', 'title.ico')
 if not os.path.exists(icon_path):
     icon_path = P('title.ico') if os.path.exists(P('title.ico')) else None
 
-# helper for absolute paths based on project root PR
-def P(*parts): return os.path.join(PR, *parts)
-
 a = Analysis(
     [P('sierra_patcher', 'main.py')],   # 
     pathex=[PR],
@@ -82,9 +81,9 @@ exe = EXE(
     [],
     name='sierra-patcher',
     icon=icon_path,          # None if not found
-    console=False,            # keep console for CLI; GUI hides it at runtime
+    console=False,            # public GUI build; packaged CLI output is hidden
     debug=False,
     strip=False,
-    upx=True,
+    upx=False,                # avoid packed binaries; friendlier for AV scans
     upx_exclude=[],
 )

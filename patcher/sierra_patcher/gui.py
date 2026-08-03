@@ -21,7 +21,7 @@ from .zstd_patch import (
     count_dest_files, count_patch_files,
 )
 from .delete_list import build_delete_list, finalize
-from .prereqs import ensure_prereqs
+from .prereqs import format_missing_requirements, missing_requirements_for_metadata
 from . import proc
 
 DIFF_PRESETS = {
@@ -405,7 +405,6 @@ class SierraPatcherGUI(tk.Tk):
         self.i_threads.delete(0, tk.END)
         self.i_threads.insert(0, str(optimal_threads()))
         self.i_force = tk.BooleanVar(value=False)
-        self.i_prereq = tk.BooleanVar(value=False)
 
         self._row(
             f, 0, "Destination to patch",
@@ -422,21 +421,19 @@ class SierraPatcherGUI(tk.Tk):
 
         ttk.Checkbutton(f, text="Force (bypass metadata checks)", variable=self.i_force)\
             .grid(row=2, column=0, columnspan=2, sticky="w", padx=12)
-        ttk.Checkbutton(f, text="install .NET prerequisites", variable=self.i_prereq)\
-            .grid(row=3, column=0, columnspan=2, sticky="w", padx=12)
 
         
         # Install button: highlighted, disabled until valid
         self.btn_install = ttk.Button(f, text="Install SPT", style="AccentInstall.TButton", command=self._run_install)
         self.btn_install.state(["!disabled"])
-        self.btn_install.grid(row=4, column=0, columnspan=3, pady=(8, 8), padx=12, sticky="w")
+        self.btn_install.grid(row=3, column=0, columnspan=3, pady=(8, 8), padx=12, sticky="w")
 
         self.btn_abort_ins = ttk.Button(f, text="Abort", command=self._abort_install, state="disabled")
-        self.btn_abort_ins.grid(row=4, column=1, padx=6, pady=(6,8), sticky="w")
+        self.btn_abort_ins.grid(row=3, column=1, padx=6, pady=(6,8), sticky="w")
 
         # ---- Status panel -------------------------------------------------------
         card = ttk.LabelFrame(f, text="Status")
-        card.grid(row=5, column=0, columnspan=3, sticky="ew", padx=10, pady=(8, 0))
+        card.grid(row=4, column=0, columnspan=3, sticky="ew", padx=10, pady=(8, 0))
         card.columnconfigure(0, weight=1)   # System
         card.columnconfigure(1, weight=2)   # Patcher
         card.columnconfigure(2, weight=1)   # Tarkov (wider)
@@ -653,6 +650,55 @@ class SierraPatcherGUI(tk.Tk):
             entry.delete(0, tk.END)
             entry.insert(0, d)
 
+    def _show_dependency_prompt(self, meta: Meta, missing) -> bool:
+        result = {"continue": False}
+        win = tk.Toplevel(self)
+        win.title(".NET Dependencies")
+        win.resizable(False, False)
+        win.transient(self)
+        win.grab_set()
+
+        release = meta.title or "this patch"
+        ttk.Label(
+            win,
+            text=f"{release} needs additional Microsoft .NET components.",
+            font=("Segoe UI", 10, "bold"),
+        ).grid(row=0, column=0, columnspan=4, sticky="w", padx=12, pady=(12, 4))
+        ttk.Label(
+            win,
+            text="Install these from Microsoft, then press Install again. You can continue if you have already installed them elsewhere.",
+            wraplength=560,
+        ).grid(row=1, column=0, columnspan=4, sticky="w", padx=12, pady=(0, 8))
+
+        text = ScrolledText(win, height=9, width=78, wrap="word")
+        text.grid(row=2, column=0, columnspan=4, sticky="ew", padx=12, pady=(0, 8))
+        text.insert("1.0", format_missing_requirements(missing))
+        text.configure(state="disabled")
+
+        def open_all():
+            for req in missing:
+                webbrowser.open(req.download_url)
+
+        def copy_links():
+            links = "\n".join(req.download_url for req in missing)
+            copy_to_clipboard(self, links, toast=False)
+
+        def continue_install():
+            result["continue"] = True
+            win.destroy()
+
+        ttk.Button(win, text="Open links", command=open_all).grid(row=3, column=0, padx=(12, 6), pady=(0, 12), sticky="w")
+        ttk.Button(win, text="Copy links", command=copy_links).grid(row=3, column=1, padx=6, pady=(0, 12), sticky="w")
+        ttk.Button(win, text="Continue anyway", command=continue_install).grid(row=3, column=2, padx=6, pady=(0, 12), sticky="e")
+        ttk.Button(win, text="Cancel", command=win.destroy).grid(row=3, column=3, padx=(6, 12), pady=(0, 12), sticky="e")
+
+        win.update_idletasks()
+        x = self.winfo_rootx() + max(0, (self.winfo_width() - win.winfo_width()) // 2)
+        y = self.winfo_rooty() + max(0, (self.winfo_height() - win.winfo_height()) // 2)
+        win.geometry(f"+{x}+{y}")
+        self.wait_window(win)
+        return result["continue"]
+
     # ---------- Action handlers ----------
     def _run_generate(self):
         self._cancel = threading.Event()
@@ -780,15 +826,26 @@ class SierraPatcherGUI(tk.Tk):
         dst = self.i_dest.get().strip()
         threads = int(self.i_threads.get())
         force = self.i_force.get()
-        prereq = self.i_prereq.get()
         if not dst:
             messagebox.showerror("Missing folder", "Please set Destination folder.")
+            self.btn_abort_ins.state(["disabled"])
+            return
+        try:
+            meta_for_deps = Meta.read(STORAGE_read_DIR)
+            missing_deps = missing_requirements_for_metadata(meta_for_deps)
+        except Exception as e:
+            messagebox.showerror("Metadata error", f"Could not read patch metadata:\n{e}")
+            self.btn_abort_ins.state(["disabled"])
+            return
+        if missing_deps and not self._show_dependency_prompt(meta_for_deps, missing_deps):
+            self._set_phase("Stopped")
+            self.btn_abort_ins.state(["disabled"])
             return
         check_resources()
 
         total_patches = count_patch_files()
-        # extra: finalize + apply_storage (+1 each) (+1 prereqs optional)
-        extra_steps = 2 + (1 if prereq else 0)
+        # extra: finalize + apply_storage (+1 each)
+        extra_steps = 2
         self._reset_prog(total_patches + extra_steps, "Applying patches")
 
         def on_progress(phase, current, total, message):
@@ -888,13 +945,6 @@ class SierraPatcherGUI(tk.Tk):
                     cancel_event=self._cancel,
                     on_progress=lambda _p, cur, tot, msg: self._phase_progress(cur, tot, msg),
                 )
-
-                # Phase 4: prerequisites (optional, single step)
-                if prereq:
-                    self._set_phase("Installing .NET prerequisites")
-                    self._reset_prog(1, "Installing prerequisites")
-                    ensure_prereqs(interactive=False)
-                    self._phase_progress(1, 1, "prereqs installed")
 
                 self._set_phase("Done")
                 self._log("[install] done")

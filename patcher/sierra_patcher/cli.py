@@ -119,6 +119,11 @@ def _cmd_install(args: argparse.Namespace) -> None:
     check_resources()
     threads = args.threads or optimal_threads()
 
+    if not args.skip_prereq_check:
+        missing = ensure_prereqs(meta, interactive=False)
+        if missing:
+            raise SystemExit("Missing required .NET dependencies. Install them from the links above, then run again.")
+
     print("Applying patches...")
     ok = apply_all_patches(dest, workers=threads)
 
@@ -126,9 +131,6 @@ def _cmd_install(args: argparse.Namespace) -> None:
     finalize(dest, _DEF_DELETE_LIST_read)
 
     apply_storage(STORAGE_read_DIR, dest)
-
-    if args.prereqs:
-        ensure_prereqs(interactive=not args.yes)
 
     if not ok:
         print("Some patches failed. See logs above.")
@@ -145,7 +147,8 @@ def build_parser(dev: bool) -> argparse.ArgumentParser:
     i.add_argument("--dir", type=str, help="Destination game folder to patch")
     i.add_argument("--threads", type=int, help="Worker threads")
     i.add_argument("--force", action="store_true", help="Bypass metadata checks")
-    i.add_argument("--prereqs", action="store_true", help="Ensure .NET prerequisites")
+    i.add_argument("--prereqs", action="store_true", help="Deprecated: dependencies are checked automatically and never auto-installed")
+    i.add_argument("--skip-prereq-check", action="store_true", help="Skip .NET dependency preflight")
     i.add_argument("-y", "--yes", action="store_true", help="Assume yes for prompts")
     i.set_defaults(func=_cmd_install)
 
