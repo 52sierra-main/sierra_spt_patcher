@@ -5,11 +5,13 @@ import shutil
 import subprocess
 import sys
 import threading
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from tqdm import tqdm
 
+from .hygiene import copy_package_file, format_size, is_package_excluded
 from .paths import PATCH_out_DIR, PATCH_read_DIR, ZSTD_EXE
 from .proc import run_quiet
 
@@ -51,6 +53,13 @@ def _normalize_zstd_args(zstd_args: list[str] | None) -> list[str]:
     return list(zstd_args) if zstd_args else ["--long=31"]
 
 
+def _decode_zstd_args(zstd_args: list[str]) -> list[str]:
+    args = [arg for arg in zstd_args if arg == "--long" or arg.startswith("--long=")]
+    if not any(arg == "--long" or arg.startswith("--long=") for arg in args):
+        args.append("--long=31")
+    return args
+
+
 def process_file(
     source_root: str,
     dest_root: str,
@@ -59,7 +68,13 @@ def process_file(
     missing_root: str,
     zstd_args: list[str] | None = None,
     cancel_event=None,
-) -> None:
+) -> str:
+    if cancel_event and cancel_event.is_set():
+        return "cancelled"
+
+    if is_package_excluded(dest_file, dest_root):
+        return "excluded"
+
     rel = os.path.relpath(dest_file, dest_root)
     src = os.path.join(source_root, rel)
     patch_file = os.path.join(out_root, rel + ".zst")
@@ -68,13 +83,11 @@ def process_file(
 
     if not os.path.exists(src):
         # not in source → collect as "additional"
-        dst_missing = os.path.join(missing_root, rel)
-        os.makedirs(os.path.dirname(dst_missing), exist_ok=True)
-        shutil.copy(dest_file, dst_missing)
-        return
+        copy_package_file(dest_file, missing_root, rel)
+        return "additional"
 
     if filecmp.cmp(src, dest_file, shallow=False):
-        return  # identical
+        return "identical"
 
     args = _normalize_zstd_args(zstd_args)
 
@@ -86,20 +99,20 @@ def process_file(
         cancel_event=cancel_event,
     )
 
-    # quick verification: apply to a temp copy and compare
-    src_tmp, out_tmp = src + ".tmp_src", dest_file + ".tmp_out"
+    # Quick verification: apply to a temp file outside source/target trees.
+    verify_dir = tempfile.mkdtemp(prefix="sierra_verify_", dir=str(Path(out_root).parent))
+    out_tmp = str(Path(verify_dir) / Path(dest_file).name)
     try:
-        shutil.copy(src, src_tmp)
         run_quiet(
             [
                 ZSTD_EXE,
                 "-d",
                 "--patch-from",
-                src_tmp,
+                src,
                 patch_file,
                 "-o",
                 out_tmp,
-                *args,
+                *_decode_zstd_args(args),
                 "-T1",
             ],
             check=True,
@@ -109,10 +122,21 @@ def process_file(
 
         if not filecmp.cmp(dest_file, out_tmp, shallow=False):
             raise RuntimeError(f"verification failed for {rel}")
+
+        patch_size = os.path.getsize(patch_file)
+        target_size = os.path.getsize(dest_file)
+        if patch_size > target_size:
+            copy_package_file(dest_file, missing_root, rel)
+            os.remove(patch_file)
+            _log(
+                f"kept full file for {rel} "
+                f"(delta {format_size(patch_size)} > target {format_size(target_size)})"
+            )
+            return "full"
+
+        return "delta"
     finally:
-        for p in (src_tmp, out_tmp):
-            if os.path.exists(p):
-                os.remove(p)
+        shutil.rmtree(verify_dir, ignore_errors=True)
 
 
 def generate_patches(
@@ -129,13 +153,26 @@ def generate_patches(
     """Generate patches; returns number of processed files (including skipped/added)."""
 
     files: list[str] = []
+    excluded = 0
     for r, _, fs in os.walk(dest_root):
         for f in fs:
-            files.append(os.path.join(r, f))
+            path = os.path.join(r, f)
+            if is_package_excluded(path, dest_root):
+                excluded += 1
+                continue
+            files.append(path)
 
     total = len(files)
     done = 0
     lock = threading.Lock()
+    stats = {
+        "delta": 0,
+        "full": 0,
+        "additional": 0,
+        "identical": 0,
+        "excluded": excluded,
+        "cancelled": 0,
+    }
 
     with tqdm(
         total=total,
@@ -145,7 +182,7 @@ def generate_patches(
         disable=_tqdm_disable() if use_tqdm else True,
     ) as bar:
         with ThreadPoolExecutor(max_workers=workers) as ex:
-            futs = [
+            futs = {
                 ex.submit(
                     process_file,
                     source_root,
@@ -155,22 +192,30 @@ def generate_patches(
                     missing_root,
                     zstd_args,
                     cancel_event,
-                )
+                ): f
                 for f in files
-            ]
+            }
 
-            for _ in as_completed(futs):
+            for fut in as_completed(futs):
                 if cancel_event and cancel_event.is_set():
                     break
 
+                result = fut.result()
                 with lock:
                     done += 1
+                    if result in stats:
+                        stats[result] += 1
 
                 if on_progress:
                     on_progress("generate:patch", done, total, f"patched {done}/{total}")
 
                 bar.update(1)
 
+    _log(
+        "generation summary: "
+        f"delta={stats['delta']}, full={stats['full']}, additional={stats['additional']}, "
+        f"identical={stats['identical']}, hygiene_skipped={stats['excluded']}"
+    )
     return total
 
 
@@ -273,8 +318,11 @@ def apply_all_patches(
 
 def count_dest_files(dest_root: str) -> int:
     c = 0
-    for _, _, fs in os.walk(dest_root):
-        c += len(fs)
+    for r, _, fs in os.walk(dest_root):
+        for f in fs:
+            path = os.path.join(r, f)
+            if not is_package_excluded(path, dest_root):
+                c += 1
     return c
 
 

@@ -1,5 +1,6 @@
-import os, shutil, random, string, subprocess, re
+import os, shutil, random, string, re
 from pathlib import Path
+from .hygiene import format_size, largest_package_files, prune_package_exclusions
 from .paths import SEVENZIP
 from .proc import run_quiet
 
@@ -50,6 +51,32 @@ def pack_additional(additional_dir: str | Path, storage_dir: str | Path,
     storage_dir = Path(storage_dir)
     storage_dir.mkdir(parents=True, exist_ok=True)
     archive = storage_dir / "storage.sierra"
+    key_file = storage_dir / _KEY_NAME
+
+    report = prune_package_exclusions(additional_dir)
+    if report.removed_files:
+        print(
+            "storage hygiene removed "
+            f"{report.removed_files} files ({format_size(report.removed_bytes)})"
+        )
+
+    if archive.exists():
+        archive.unlink()
+    if key_file.exists():
+        key_file.unlink()
+
+    if report.remaining_files == 0:
+        shutil.rmtree(additional_dir)
+        print("No additional files to pack.")
+        return
+
+    print(
+        "Packing additional files: "
+        f"{report.remaining_files} files, {format_size(report.remaining_bytes)}"
+    )
+    for rel, size in largest_package_files(additional_dir, limit=8):
+        print(f" - {format_size(size)} {rel}")
+
     pw = os.environ.get("AF_PASS") or _gen_pass()
     run_quiet(
         [SEVENZIP, "a", "-t7z", str(archive), str(additional_dir / "*"),

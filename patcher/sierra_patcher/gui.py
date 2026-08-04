@@ -25,8 +25,8 @@ from .prereqs import format_missing_requirements, missing_requirements_for_metad
 from . import proc
 
 DIFF_PRESETS = {
-  "Fast (bigger patches)": ["-3"],
-  "Balanced": ["-10", "--long=27"],
+  "Fast (bigger patches)": ["-3", "--long=31"],
+  "Balanced": ["-10", "--long=31"],
   "Aggressive (smallest patches)": ["--ultra", "-22", "--long=31"],
   "MAX (experimental)": ["--max", "--long=31"],
 }
