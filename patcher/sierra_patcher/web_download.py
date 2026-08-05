@@ -107,8 +107,14 @@ def _stream_request(
     destination.parent.mkdir(parents=True, exist_ok=True)
     part = destination.with_suffix(destination.suffix + ".part")
 
-    # A previous run may have finished the transfer but exited before rename.
-    if part.exists() and _verify_file(part, expected_size, expected_sha256):
+    # Only promote a prior .part without another request when we have enough
+    # metadata to verify it. Manifests are unsigned/unhashed in v1, so their
+    # partial files must always be fetched again.
+    if (
+        part.exists()
+        and (expected_size is not None or expected_sha256 is not None)
+        and _verify_file(part, expected_size, expected_sha256)
+    ):
         os.replace(part, destination)
         return
 
