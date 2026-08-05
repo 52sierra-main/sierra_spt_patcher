@@ -5,16 +5,18 @@ import json
 import os
 import re
 import shutil
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable
 
 
 # Fixed first-party repository root. Manifests never supply URLs.
 TRUSTED_REPOSITORY_BASE = "https://52sierra.net/patcher/repo/"
+DOWNLOAD_ATTEMPTS = 3
 
 _OBJECT_RE = re.compile(r"^[0-9a-f]{64}$")
 _PACKAGE_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -119,7 +121,10 @@ def _stream_request(
         return
 
     offset = part.stat().st_size if (resume and part.exists()) else 0
-    headers = {"User-Agent": "SierraPatcher/1 web-delivery"}
+    headers = {
+        "User-Agent": "SierraPatcher/1 web-delivery",
+        "Accept-Encoding": "identity",
+    }
     if offset:
         headers["Range"] = f"bytes={offset}-"
 
@@ -147,7 +152,8 @@ def _stream_request(
         raise DownloadError(f"download failed for {url}: {e}") from e
 
     status = getattr(response, "status", None)
-    if offset and status != 206:
+    content_range = response.headers.get("Content-Range", "")
+    if offset and (status != 206 or not content_range.startswith(f"bytes {offset}-")):
         response.close()
         part.unlink(missing_ok=True)
         return _stream_request(
@@ -162,26 +168,64 @@ def _stream_request(
 
     mode = "ab" if offset else "wb"
     current = offset
-    with response, part.open(mode) as out:
-        while True:
-            block = response.read(block_size)
-            if not block:
-                break
-            out.write(block)
-            current += len(block)
-            if on_progress:
-                total = expected_size or max(current, 1)
-                on_progress("web:download", current, total, destination.name)
+    try:
+        with response, part.open(mode) as out:
+            while True:
+                block = response.read(block_size)
+                if not block:
+                    break
+                out.write(block)
+                current += len(block)
+                if on_progress:
+                    total = expected_size or max(current, 1)
+                    on_progress("web:download", current, total, destination.name)
+    except Exception as e:
+        # Keep the partial bytes. A retry can continue with HTTP Range.
+        raise DownloadError(f"stream interrupted for {destination.name}: {e}") from e
 
     if not _verify_file(part, expected_size, expected_sha256):
-        # Hash failures are not resumable because the stored bytes are not
-        # trusted. Leave size-only failures as .part so a short transfer can
-        # continue on the next attempt.
-        if expected_sha256 and part.exists() and expected_size is not None and part.stat().st_size >= expected_size:
+        # A file at/above its expected length with a bad hash cannot be resumed
+        # safely. Short files remain as .part for the next Range request.
+        if (
+            expected_sha256
+            and part.exists()
+            and expected_size is not None
+            and part.stat().st_size >= expected_size
+        ):
             part.unlink(missing_ok=True)
         raise DownloadError(f"download verification failed for {destination.name}")
 
     os.replace(part, destination)
+
+
+def _download_with_retries(
+    url: str,
+    destination: Path,
+    *,
+    expected_size: int | None = None,
+    expected_sha256: str | None = None,
+    resume: bool = True,
+    on_progress: Callable[[str, int, int, str], None] | None = None,
+) -> None:
+    last_error: Exception | None = None
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        try:
+            _stream_request(
+                url,
+                destination,
+                expected_size=expected_size,
+                expected_sha256=expected_sha256,
+                resume=resume,
+                on_progress=on_progress,
+            )
+            return
+        except DownloadError as e:
+            last_error = e
+            if attempt < DOWNLOAD_ATTEMPTS:
+                time.sleep(min(2 ** (attempt - 1), 4))
+    raise DownloadError(
+        f"download failed after {DOWNLOAD_ATTEMPTS} attempts: {destination.name}"
+    ) from last_error
 
 
 def fetch_manifest(package_id: str, cache_root: str | Path) -> dict:
@@ -189,7 +233,11 @@ def fetch_manifest(package_id: str, cache_root: str | Path) -> dict:
     cache_root = Path(cache_root)
     manifest_path = cache_root / "manifests" / package_id / "manifest.json"
 
-    _stream_request(_manifest_url(package_id), manifest_path, resume=False)
+    _download_with_retries(
+        _manifest_url(package_id),
+        manifest_path,
+        resume=False,
+    )
 
     try:
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -207,12 +255,20 @@ def fetch_manifest(package_id: str, cache_root: str | Path) -> dict:
 
 
 def _safe_logical_path(value: str) -> Path:
-    raw = Path(value)
+    # Manifest paths use a platform-independent POSIX representation. Reject
+    # Windows separators/drives explicitly before converting to a local Path.
+    if not value or "\\" in value:
+        raise DownloadError(f"unsafe package path: {value}")
+
+    raw = PurePosixPath(value)
     if raw.is_absolute() or ".." in raw.parts:
+        raise DownloadError(f"unsafe package path: {value}")
+    if any(part in ("", ".", "..") or ":" in part for part in raw.parts):
         raise DownloadError(f"unsafe package path: {value}")
     if not raw.parts or raw.parts[0] not in ("patchfiles", "storage"):
         raise DownloadError(f"unsupported package path: {value}")
-    return raw
+
+    return Path(*raw.parts)
 
 
 @dataclass(frozen=True)
@@ -237,11 +293,17 @@ def materialize_web_package(
     package_root.mkdir(parents=True, exist_ok=True)
 
     files = manifest["files"]
+    seen_paths: set[str] = set()
     for index, entry in enumerate(files, start=1):
         if not isinstance(entry, dict):
             raise DownloadError("invalid manifest file entry")
 
         rel = _safe_logical_path(str(entry.get("path", "")))
+        rel_key = rel.as_posix().lower()
+        if rel_key in seen_paths:
+            raise DownloadError(f"duplicate package path in manifest: {rel}")
+        seen_paths.add(rel_key)
+
         expected_size = int(entry.get("size", -1))
         expected_hash = str(entry.get("sha256", "")).lower()
         objects = entry.get("objects")
@@ -276,7 +338,7 @@ def materialize_web_package(
                 local_object = object_cache / oid[:2] / oid
                 if not _verify_file(local_object, osize, oid):
                     local_object.unlink(missing_ok=True)
-                    _stream_request(
+                    _download_with_retries(
                         _object_url(oid),
                         local_object,
                         expected_size=osize,
