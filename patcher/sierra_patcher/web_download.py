@@ -16,7 +16,6 @@ from pathlib import Path, PurePosixPath
 from typing import Callable
 
 
-# Fixed first-party repository root. Manifests never supply URLs.
 TRUSTED_REPOSITORY_BASE = "https://52sierra.net/patcher/repo/"
 DOWNLOAD_ATTEMPTS = 3
 DEFAULT_DOWNLOAD_WORKERS = 12
@@ -31,8 +30,12 @@ class DownloadError(RuntimeError):
     pass
 
 
+def _raise_if_cancelled(cancel_event) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise DownloadError("web package preparation cancelled")
+
+
 def _io_path(path: str | Path) -> str:
-    """Return a Python I/O path that supports long absolute paths on Windows."""
     value = os.path.abspath(os.fspath(path))
     if os.name != "nt" or value.startswith("\\\\?\\"):
         return value
@@ -60,10 +63,11 @@ def _size(path: str | Path) -> int:
     return os.path.getsize(_io_path(path))
 
 
-def _sha256_file(path: str | Path, block_size: int = _IO_BLOCK_SIZE) -> str:
+def _sha256_file(path: str | Path, block_size: int = _IO_BLOCK_SIZE, cancel_event=None) -> str:
     h = hashlib.sha256()
     with open(_io_path(path), "rb") as stream:
         while True:
+            _raise_if_cancelled(cancel_event)
             block = stream.read(block_size)
             if not block:
                 break
@@ -75,11 +79,13 @@ def _verify_file(
     path: str | Path,
     expected_size: int | None,
     expected_sha256: str | None,
+    cancel_event=None,
 ) -> bool:
     try:
+        _raise_if_cancelled(cancel_event)
         if expected_size is not None and _size(path) != expected_size:
             return False
-        if expected_sha256 and _sha256_file(path).lower() != expected_sha256.lower():
+        if expected_sha256 and _sha256_file(path, cancel_event=cancel_event).lower() != expected_sha256.lower():
             return False
         return True
     except OSError:
@@ -143,16 +149,16 @@ def _stream_request(
     resume: bool = True,
     block_size: int = 1024 * 1024,
     on_progress: Callable[[str, int, int, str], None] | None = None,
+    cancel_event=None,
 ) -> None:
+    _raise_if_cancelled(cancel_event)
     _mkdir(destination.parent)
     part = destination.with_suffix(destination.suffix + ".part")
 
-    # Only promote a prior .part without another request when enough metadata
-    # exists to verify it. Manifests are unsigned/unhashed in v1.
     if (
         _exists(part)
         and (expected_size is not None or expected_sha256 is not None)
-        and _verify_file(part, expected_size, expected_sha256)
+        and _verify_file(part, expected_size, expected_sha256, cancel_event)
     ):
         os.replace(_io_path(part), _io_path(destination))
         return
@@ -166,7 +172,7 @@ def _stream_request(
         headers["Range"] = f"bytes={offset}-"
 
     request = urllib.request.Request(url, headers=headers, method="GET")
-
+    _raise_if_cancelled(cancel_event)
     try:
         response = _opener().open(request, timeout=30)
     except urllib.error.HTTPError as exc:
@@ -180,6 +186,7 @@ def _stream_request(
                 resume=False,
                 block_size=block_size,
                 on_progress=on_progress,
+                cancel_event=cancel_event,
             )
         raise DownloadError(f"HTTP error {exc.code} for {url}") from exc
     except OSError as exc:
@@ -198,6 +205,7 @@ def _stream_request(
             resume=False,
             block_size=block_size,
             on_progress=on_progress,
+            cancel_event=cancel_event,
         )
 
     mode = "ab" if offset else "wb"
@@ -205,6 +213,7 @@ def _stream_request(
     try:
         with response, open(_io_path(part), mode) as output:
             while True:
+                _raise_if_cancelled(cancel_event)
                 block = response.read(block_size)
                 if not block:
                     break
@@ -217,13 +226,13 @@ def _stream_request(
                         expected_size or max(current, 1),
                         destination.name,
                     )
+    except DownloadError:
+        raise
     except Exception as exc:
-        # Keep partial bytes. A retry can continue with HTTP Range.
         raise DownloadError(f"stream interrupted for {destination.name}: {exc}") from exc
 
-    if not _verify_file(part, expected_size, expected_sha256):
-        # A full-length object with a bad hash is not resumable. Short objects
-        # remain as .part for the next Range request.
+    _raise_if_cancelled(cancel_event)
+    if not _verify_file(part, expected_size, expected_sha256, cancel_event):
         if (
             expected_sha256
             and _exists(part)
@@ -244,9 +253,11 @@ def _download_with_retries(
     expected_sha256: str | None = None,
     resume: bool = True,
     on_progress: Callable[[str, int, int, str], None] | None = None,
+    cancel_event=None,
 ) -> None:
     last_error: Exception | None = None
     for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        _raise_if_cancelled(cancel_event)
         try:
             _stream_request(
                 url,
@@ -255,18 +266,26 @@ def _download_with_retries(
                 expected_sha256=expected_sha256,
                 resume=resume,
                 on_progress=on_progress,
+                cancel_event=cancel_event,
             )
             return
         except DownloadError as exc:
             last_error = exc
+            _raise_if_cancelled(cancel_event)
             if attempt < DOWNLOAD_ATTEMPTS:
-                time.sleep(min(2 ** (attempt - 1), 4))
+                delay = min(2 ** (attempt - 1), 4)
+                if cancel_event is not None:
+                    if cancel_event.wait(delay):
+                        _raise_if_cancelled(cancel_event)
+                else:
+                    time.sleep(delay)
     raise DownloadError(
         f"download failed after {DOWNLOAD_ATTEMPTS} attempts: {destination.name}"
     ) from last_error
 
 
-def fetch_manifest(package_id: str, cache_root: str | Path) -> dict:
+def fetch_manifest(package_id: str, cache_root: str | Path, *, cancel_event=None) -> dict:
+    _raise_if_cancelled(cancel_event)
     package_id = _package_id(package_id)
     cache_root = Path(cache_root)
     manifest_path = cache_root / "manifests" / package_id / "manifest.json"
@@ -275,6 +294,7 @@ def fetch_manifest(package_id: str, cache_root: str | Path) -> dict:
         _manifest_url(package_id),
         manifest_path,
         resume=False,
+        cancel_event=cancel_event,
     )
 
     try:
@@ -289,14 +309,12 @@ def fetch_manifest(package_id: str, cache_root: str | Path) -> dict:
         raise DownloadError("manifest package_id does not match requested package")
     if not isinstance(data.get("files"), list):
         raise DownloadError("manifest files must be a list")
-
     return data
 
 
 def _safe_logical_path(value: str) -> Path:
     if not value or "\\" in value:
         raise DownloadError(f"unsafe package path: {value}")
-
     raw = PurePosixPath(value)
     if raw.is_absolute() or ".." in raw.parts:
         raise DownloadError(f"unsafe package path: {value}")
@@ -304,7 +322,6 @@ def _safe_logical_path(value: str) -> Path:
         raise DownloadError(f"unsafe package path: {value}")
     if not raw.parts or raw.parts[0] not in ("patchfiles", "storage"):
         raise DownloadError(f"unsupported package path: {value}")
-
     return Path(*raw.parts)
 
 
@@ -338,7 +355,6 @@ def _parse_manifest(manifest: dict) -> tuple[list[_FileSpec], dict[str, int]]:
     for entry in manifest["files"]:
         if not isinstance(entry, dict):
             raise DownloadError("invalid manifest file entry")
-
         rel = _safe_logical_path(str(entry.get("path", "")))
         rel_key = rel.as_posix().lower()
         if rel_key in seen_paths:
@@ -349,7 +365,6 @@ def _parse_manifest(manifest: dict) -> tuple[list[_FileSpec], dict[str, int]]:
             expected_size = int(entry.get("size", -1))
         except (TypeError, ValueError) as exc:
             raise DownloadError(f"invalid file size for {rel}") from exc
-
         expected_hash = str(entry.get("sha256", "")).lower()
         raw_objects = entry.get("objects")
         if expected_size < 0 or not _OBJECT_RE.fullmatch(expected_hash):
@@ -369,7 +384,6 @@ def _parse_manifest(manifest: dict) -> tuple[list[_FileSpec], dict[str, int]]:
                 raise DownloadError(f"invalid object size for {object_id}") from exc
             if object_size <= 0:
                 raise DownloadError(f"invalid object size for {object_id}")
-
             prior_size = objects_by_id.get(object_id)
             if prior_size is not None and prior_size != object_size:
                 raise DownloadError(f"conflicting object sizes for {object_id}")
@@ -379,28 +393,14 @@ def _parse_manifest(manifest: dict) -> tuple[list[_FileSpec], dict[str, int]]:
 
         if object_bytes != expected_size:
             raise DownloadError(
-                f"object sizes do not reconstruct {rel}: "
-                f"expected {expected_size}, manifest has {object_bytes}"
+                f"object sizes do not reconstruct {rel}: expected {expected_size}, manifest has {object_bytes}"
             )
-
-        files.append(
-            _FileSpec(
-                path=rel,
-                size=expected_size,
-                sha256=expected_hash,
-                objects=tuple(object_specs),
-            )
-        )
-
+        files.append(_FileSpec(rel, expected_size, expected_hash, tuple(object_specs)))
     return files, objects_by_id
 
 
 class _ObjectProgress:
-    def __init__(
-        self,
-        object_sizes: dict[str, int],
-        callback: Callable[[str, int, int, str], None] | None,
-    ):
+    def __init__(self, object_sizes: dict[str, int], callback):
         self._sizes = object_sizes
         self._callback = callback
         self._values: dict[str, int] = {}
@@ -440,16 +440,13 @@ def _ensure_object(
     object_size: int,
     object_cache: Path,
     progress: _ObjectProgress,
+    cancel_event=None,
 ) -> str:
+    _raise_if_cancelled(cancel_event)
     destination = object_cache / object_id[:2] / object_id
-
-    # Final object files are only created after SHA-256 verification. Reusing a
-    # final cache entry by size avoids rehashing every object on each restart;
-    # complete reconstructed files are still verified against the manifest.
     if _exists(destination) and _size(destination) == object_size:
         progress.complete(object_id, "cached")
         return "cached"
-
     if _exists(destination):
         _unlink(destination)
 
@@ -463,6 +460,7 @@ def _ensure_object(
         expected_sha256=object_id,
         resume=True,
         on_progress=object_progress,
+        cancel_event=cancel_event,
     )
     progress.complete(object_id, "downloaded")
     return "downloaded"
@@ -473,13 +471,14 @@ def _download_objects(
     object_cache: Path,
     *,
     workers: int,
-    on_progress: Callable[[str, int, int, str], None] | None,
+    on_progress,
+    cancel_event=None,
 ) -> None:
+    _raise_if_cancelled(cancel_event)
     if not objects_by_id:
         if on_progress:
             on_progress("web:objects", 1, 1, "No objects required")
         return
-
     max_workers = max(1, min(int(workers), 64))
     progress = _ObjectProgress(objects_by_id, on_progress)
 
@@ -491,10 +490,15 @@ def _download_objects(
                 object_size,
                 object_cache,
                 progress,
+                cancel_event,
             ): object_id
             for object_id, object_size in objects_by_id.items()
         }
         for future in as_completed(futures):
+            if cancel_event is not None and cancel_event.is_set():
+                for pending in futures:
+                    pending.cancel()
+                _raise_if_cancelled(cancel_event)
             try:
                 future.result()
             except Exception:
@@ -507,33 +511,31 @@ def _materialize_one_file(
     spec: _FileSpec,
     package_root: Path,
     object_cache: Path,
+    cancel_event=None,
 ) -> str:
+    _raise_if_cancelled(cancel_event)
     final_path = package_root / spec.path
     _mkdir(final_path.parent)
 
-    if _exists(final_path) and _verify_file(final_path, spec.size, spec.sha256):
+    if _exists(final_path) and _verify_file(final_path, spec.size, spec.sha256, cancel_event):
         return "cached"
 
     temp_path = final_path.with_name(
         f"{final_path.name}.assembling-{os.getpid()}-{threading.get_ident()}"
     )
     _unlink(temp_path)
-
     file_hash = hashlib.sha256()
     written = 0
     try:
         with open(_io_path(temp_path), "wb") as assembled:
             for object_spec in spec.objects:
-                local_object = (
-                    object_cache
-                    / object_spec.object_id[:2]
-                    / object_spec.object_id
-                )
+                _raise_if_cancelled(cancel_event)
+                local_object = object_cache / object_spec.object_id[:2] / object_spec.object_id
                 if not _exists(local_object) or _size(local_object) != object_spec.size:
                     raise DownloadError(f"required object is missing: {object_spec.object_id}")
-
                 with open(_io_path(local_object), "rb") as source:
                     while True:
+                        _raise_if_cancelled(cancel_event)
                         block = source.read(_IO_BLOCK_SIZE)
                         if not block:
                             break
@@ -541,9 +543,9 @@ def _materialize_one_file(
                         file_hash.update(block)
                         written += len(block)
 
+        _raise_if_cancelled(cancel_event)
         if written != spec.size or file_hash.hexdigest() != spec.sha256:
             raise DownloadError(f"reconstructed file verification failed: {spec.path}")
-
         os.replace(_io_path(temp_path), _io_path(final_path))
         return "ready"
     finally:
@@ -556,21 +558,26 @@ def _materialize_files(
     object_cache: Path,
     *,
     workers: int,
-    on_progress: Callable[[str, int, int, str], None] | None,
+    on_progress,
+    cancel_event=None,
 ) -> None:
+    _raise_if_cancelled(cancel_event)
     if not files:
         if on_progress:
             on_progress("web:materialize", 1, 1, "No package files")
         return
-
     max_workers = max(1, min(int(workers), 32))
     completed = 0
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
-            executor.submit(_materialize_one_file, spec, package_root, object_cache): spec
+            executor.submit(_materialize_one_file, spec, package_root, object_cache, cancel_event): spec
             for spec in files
         }
         for future in as_completed(futures):
+            if cancel_event is not None and cancel_event.is_set():
+                for pending in futures:
+                    pending.cancel()
+                _raise_if_cancelled(cancel_event)
             spec = futures[future]
             try:
                 result = future.result()
@@ -595,11 +602,13 @@ def materialize_web_package(
     download_workers: int = DEFAULT_DOWNLOAD_WORKERS,
     materialize_workers: int = DEFAULT_MATERIALIZE_WORKERS,
     on_progress: Callable[[str, int, int, str], None] | None = None,
+    cancel_event=None,
 ) -> MaterializedPackage:
+    _raise_if_cancelled(cancel_event)
     cache_root = Path(cache_root).resolve()
     if on_progress:
         on_progress("web:manifest", 0, 1, "Downloading manifest")
-    manifest = fetch_manifest(package_id, cache_root)
+    manifest = fetch_manifest(package_id, cache_root, cancel_event=cancel_event)
     if on_progress:
         on_progress("web:manifest", 1, 1, "Manifest ready")
 
@@ -613,6 +622,7 @@ def materialize_web_package(
         object_cache,
         workers=download_workers,
         on_progress=on_progress,
+        cancel_event=cancel_event,
     )
     _materialize_files(
         files,
@@ -620,8 +630,10 @@ def materialize_web_package(
         object_cache,
         workers=materialize_workers,
         on_progress=on_progress,
+        cancel_event=cancel_event,
     )
 
+    _raise_if_cancelled(cancel_event)
     manifest_path = cache_root / "manifests" / package_id / "manifest.json"
     return MaterializedPackage(
         root=package_root,
@@ -632,6 +644,5 @@ def materialize_web_package(
 
 
 def clear_materialized_package(package_id: str, cache_root: str | Path) -> None:
-    """Remove reconstructed package files while retaining verified object cache."""
     root = Path(cache_root) / "packages" / _package_id(package_id)
     shutil.rmtree(_io_path(root), ignore_errors=True)
