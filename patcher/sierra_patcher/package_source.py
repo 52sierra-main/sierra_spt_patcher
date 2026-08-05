@@ -5,7 +5,12 @@ from pathlib import Path
 from typing import Callable
 
 from .paths import PATCH_read_DIR, STORAGE_read_DIR, WORKING_DIR
-from .web_download import MaterializedPackage, materialize_web_package
+from .web_download import (
+    DEFAULT_DOWNLOAD_WORKERS,
+    DEFAULT_MATERIALIZE_WORKERS,
+    MaterializedPackage,
+    materialize_web_package,
+)
 
 
 @dataclass(frozen=True)
@@ -28,9 +33,18 @@ class LocalPackageSource:
 
 
 class WebPackageSource:
-    def __init__(self, package_id: str, cache_root: str | Path):
+    def __init__(
+        self,
+        package_id: str,
+        cache_root: str | Path,
+        *,
+        download_workers: int = DEFAULT_DOWNLOAD_WORKERS,
+        materialize_workers: int = DEFAULT_MATERIALIZE_WORKERS,
+    ):
         self.package_id = package_id
         self.cache_root = Path(cache_root)
+        self.download_workers = download_workers
+        self.materialize_workers = materialize_workers
 
     def prepare(
         self,
@@ -39,6 +53,8 @@ class WebPackageSource:
         materialized: MaterializedPackage = materialize_web_package(
             self.package_id,
             self.cache_root,
+            download_workers=self.download_workers,
+            materialize_workers=self.materialize_workers,
             on_progress=on_progress,
         )
         return PackageLayout(
