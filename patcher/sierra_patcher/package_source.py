@@ -22,7 +22,7 @@ class PackageLayout:
 
 
 class LocalPackageSource:
-    def prepare(self, on_progress=None) -> PackageLayout:
+    def prepare(self, on_progress=None, cancel_event=None) -> PackageLayout:
         root = Path(WORKING_DIR)
         return PackageLayout(
             root=root,
@@ -49,6 +49,7 @@ class WebPackageSource:
     def prepare(
         self,
         on_progress: Callable[[str, int, int, str], None] | None = None,
+        cancel_event=None,
     ) -> PackageLayout:
         materialized: MaterializedPackage = materialize_web_package(
             self.package_id,
@@ -56,6 +57,7 @@ class WebPackageSource:
             download_workers=self.download_workers,
             materialize_workers=self.materialize_workers,
             on_progress=on_progress,
+            cancel_event=cancel_event,
         )
         return PackageLayout(
             root=materialized.root,
