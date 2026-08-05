@@ -18,6 +18,12 @@ from .proc import run_quiet
 # Optional progress callback signature:
 # on_progress(phase: str, current: int, total: int, message: str)
 
+# Keep external tools comfortably below the classic Win32 MAX_PATH boundary.
+# The actual final package path may be longer; Python moves/copies use the
+# extended-path prefix on Windows when needed.
+_EXTERNAL_PATH_SOFT_LIMIT = 240
+
+
 # ----- GENERATOR -----
 try:
     from tqdm import tqdm as _tqdm  # noqa: F401
@@ -60,6 +66,59 @@ def _decode_zstd_args(zstd_args: list[str]) -> list[str]:
     return args
 
 
+def _external_path_is_long(path: str | Path) -> bool:
+    """True when a path is risky to pass directly to a Windows CLI tool."""
+    if os.name != "nt":
+        return False
+    try:
+        return len(os.path.abspath(os.fspath(path))) >= _EXTERNAL_PATH_SOFT_LIMIT
+    except Exception:
+        return len(os.fspath(path)) >= _EXTERNAL_PATH_SOFT_LIMIT
+
+
+def _python_io_path(path: str | Path) -> str:
+    """Return a path suitable for Python file I/O, including long Windows paths."""
+    value = os.path.abspath(os.fspath(path))
+    if os.name != "nt" or value.startswith("\\\\?\\"):
+        return value
+    if value.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + value[2:]
+    return "\\\\?\\" + value
+
+
+def _copy_file(src: str | Path, dst: str | Path) -> None:
+    dst_value = os.path.abspath(os.fspath(dst))
+    parent = os.path.dirname(dst_value)
+    if parent:
+        os.makedirs(_python_io_path(parent), exist_ok=True)
+    shutil.copy2(_python_io_path(src), _python_io_path(dst_value))
+
+
+def _replace_file(src: str | Path, dst: str | Path) -> None:
+    dst_value = os.path.abspath(os.fspath(dst))
+    parent = os.path.dirname(dst_value)
+    if parent:
+        os.makedirs(_python_io_path(parent), exist_ok=True)
+    os.replace(_python_io_path(src), _python_io_path(dst_value))
+
+
+def _stage_external_input(path: str | Path, stage_dir: str | Path, name: str) -> str:
+    """Copy only long-path inputs to a short staging path for external tools."""
+    value = os.path.abspath(os.fspath(path))
+    if not _external_path_is_long(value):
+        return value
+
+    staged = os.path.join(os.fspath(stage_dir), name)
+    _copy_file(value, staged)
+    return staged
+
+
+def _called_process_detail(exc: subprocess.CalledProcessError) -> str:
+    stderr = exc.stderr.strip() if isinstance(exc.stderr, str) and exc.stderr.strip() else ""
+    stdout = exc.stdout.strip() if isinstance(exc.stdout, str) and exc.stdout.strip() else ""
+    return stderr or stdout or f"exit code {exc.returncode}"
+
+
 def process_file(
     source_root: str,
     dest_root: str,
@@ -79,64 +138,98 @@ def process_file(
     src = os.path.join(source_root, rel)
     patch_file = os.path.join(out_root, rel + ".zst")
 
-    os.makedirs(os.path.dirname(patch_file), exist_ok=True)
+    # Python creates the final package hierarchy. zstd itself writes to a short,
+    # flat staging path so long mirrored Tarkov paths do not exceed MAX_PATH.
+    os.makedirs(_python_io_path(os.path.dirname(patch_file)), exist_ok=True)
 
-    if not os.path.exists(src):
+    if not os.path.exists(_python_io_path(src)):
         # not in source → collect as "additional"
         copy_package_file(dest_file, missing_root, rel)
         return "additional"
 
-    if filecmp.cmp(src, dest_file, shallow=False):
+    if filecmp.cmp(_python_io_path(src), _python_io_path(dest_file), shallow=False):
         return "identical"
 
     args = _normalize_zstd_args(zstd_args)
+    stage_parent = str(Path(out_root).parent)
+    os.makedirs(_python_io_path(stage_parent), exist_ok=True)
+    stage_dir = tempfile.mkdtemp(prefix="sierra_zstd_", dir=stage_parent)
 
-    # create patch
-    run_quiet(
-        [ZSTD_EXE, "--patch-from", src, dest_file, "-o", patch_file, *args, "-T1"],
-        check=True,
-        capture=True,
-        cancel_event=cancel_event,
-    )
+    patch_tmp = os.path.join(stage_dir, "patch.zst")
+    verify_tmp = os.path.join(stage_dir, "verify.out")
 
-    # Quick verification: apply to a temp file outside source/target trees.
-    verify_dir = tempfile.mkdtemp(prefix="sierra_verify_", dir=str(Path(out_root).parent))
-    out_tmp = str(Path(verify_dir) / Path(dest_file).name)
     try:
-        run_quiet(
-            [
-                ZSTD_EXE,
-                "-d",
-                "--patch-from",
-                src,
-                patch_file,
-                "-o",
-                out_tmp,
-                *_decode_zstd_args(args),
-                "-T1",
-            ],
-            check=True,
-            capture=True,
-            cancel_event=cancel_event,
-        )
+        src_for_zstd = _stage_external_input(src, stage_dir, "source.bin")
+        dest_for_zstd = _stage_external_input(dest_file, stage_dir, "target.bin")
 
-        if not filecmp.cmp(dest_file, out_tmp, shallow=False):
+        try:
+            run_quiet(
+                [
+                    ZSTD_EXE,
+                    "--patch-from",
+                    src_for_zstd,
+                    dest_for_zstd,
+                    "-o",
+                    patch_tmp,
+                    *args,
+                    "-T1",
+                ],
+                check=True,
+                capture=True,
+                cancel_event=cancel_event,
+            )
+        except subprocess.CalledProcessError as e:
+            detail = _called_process_detail(e)
+            raise RuntimeError(
+                f"zstd patch generation failed for {rel}: {detail}"
+            ) from e
+
+        # Quick verification while all zstd-visible paths are still short.
+        try:
+            run_quiet(
+                [
+                    ZSTD_EXE,
+                    "-d",
+                    "--patch-from",
+                    src_for_zstd,
+                    patch_tmp,
+                    "-o",
+                    verify_tmp,
+                    *_decode_zstd_args(args),
+                    "-T1",
+                ],
+                check=True,
+                capture=True,
+                cancel_event=cancel_event,
+            )
+        except subprocess.CalledProcessError as e:
+            detail = _called_process_detail(e)
+            raise RuntimeError(
+                f"zstd verification decode failed for {rel}: {detail}"
+            ) from e
+
+        if not filecmp.cmp(
+            _python_io_path(dest_file),
+            _python_io_path(verify_tmp),
+            shallow=False,
+        ):
             raise RuntimeError(f"verification failed for {rel}")
 
-        patch_size = os.path.getsize(patch_file)
-        target_size = os.path.getsize(dest_file)
+        patch_size = os.path.getsize(_python_io_path(patch_tmp))
+        target_size = os.path.getsize(_python_io_path(dest_file))
         if patch_size > target_size:
             copy_package_file(dest_file, missing_root, rel)
-            os.remove(patch_file)
             _log(
                 f"kept full file for {rel} "
                 f"(delta {format_size(patch_size)} > target {format_size(target_size)})"
             )
             return "full"
 
+        # Promote only a completely generated + verified patch into the package.
+        _replace_file(patch_tmp, patch_file)
         return "delta"
     finally:
-        shutil.rmtree(verify_dir, ignore_errors=True)
+        shutil.rmtree(stage_dir, ignore_errors=True)
 
 
 def generate_patches(
@@ -200,7 +293,24 @@ def generate_patches(
                 if cancel_event and cancel_event.is_set():
                     break
 
-                result = fut.result()
+                try:
+                    result = fut.result()
+                except Exception as e:
+                    failed_file = futs[fut]
+                    try:
+                        rel_failed = os.path.relpath(failed_file, dest_root)
+                    except Exception:
+                        rel_failed = failed_file
+                    _log(f"generation failed on: {rel_failed}")
+                    # Best effort: prevent queued work from continuing after a
+                    # deterministic file failure.
+                    for pending in futs:
+                        if pending is not fut:
+                            pending.cancel()
+                    raise RuntimeError(
+                        f"patch generation failed for {rel_failed}: {e}"
+                    ) from e
+
                 with lock:
                     done += 1
                     if result in stats:
@@ -234,38 +344,86 @@ def _apply_single(
         _log(f"missing target: {rel}")
         return False
 
-    tmp = old_file.with_suffix(old_file.suffix + ".new")
-    try:
-        run_quiet(
-            [
-                ZSTD_EXE,
-                "-d",
-                "--patch-from",
-                str(old_file),
-                str(patch_file),
-                "-o",
-                str(tmp),
-                "-T1",
-                "--long=31",
-            ],
-            check=True,
-            capture=True,
-            cancel_event=cancel_event,
-        )
+    # Normal short paths keep the old fast path. Long paths are staged at the
+    # destination root so zstd only sees short file names and the final replace
+    # remains on the same volume.
+    needs_stage = (
+        _external_path_is_long(old_file)
+        or _external_path_is_long(patch_file)
+        or _external_path_is_long(old_file.with_suffix(old_file.suffix + ".new"))
+    )
 
-        if not tmp.exists() or tmp.stat().st_size == 0:
+    if not needs_stage:
+        tmp = old_file.with_suffix(old_file.suffix + ".new")
+        try:
+            run_quiet(
+                [
+                    ZSTD_EXE,
+                    "-d",
+                    "--patch-from",
+                    str(old_file),
+                    str(patch_file),
+                    "-o",
+                    str(tmp),
+                    "-T1",
+                    "--long=31",
+                ],
+                check=True,
+                capture=True,
+                cancel_event=cancel_event,
+            )
+
+            if not tmp.exists() or tmp.stat().st_size == 0:
+                if tmp.exists():
+                    tmp.unlink()
+                return False
+
+            os.replace(tmp, old_file)
+            return True
+
+        except subprocess.CalledProcessError as e:
             if tmp.exists():
                 tmp.unlink()
+            _log(f"error patching {rel}: {_called_process_detail(e)}")
             return False
 
-        os.replace(tmp, old_file)
-        return True
+    stage_dir = tempfile.mkdtemp(prefix="sierra_apply_", dir=str(dest_dir))
+    staged_output = os.path.join(stage_dir, "patched.out")
+    try:
+        source_for_zstd = _stage_external_input(old_file, stage_dir, "source.bin")
+        patch_for_zstd = _stage_external_input(patch_file, stage_dir, "patch.zst")
 
-    except subprocess.CalledProcessError as e:
-        if tmp.exists():
-            tmp.unlink()
-        _log(f"error patching {rel}: {e.stderr.strip() if e.stderr else e}")
-        return False
+        try:
+            run_quiet(
+                [
+                    ZSTD_EXE,
+                    "-d",
+                    "--patch-from",
+                    source_for_zstd,
+                    patch_for_zstd,
+                    "-o",
+                    staged_output,
+                    "-T1",
+                    "--long=31",
+                ],
+                check=True,
+                capture=True,
+                cancel_event=cancel_event,
+            )
+        except subprocess.CalledProcessError as e:
+            _log(f"error patching {rel}: {_called_process_detail(e)}")
+            return False
+
+        if (
+            not os.path.exists(_python_io_path(staged_output))
+            or os.path.getsize(_python_io_path(staged_output)) == 0
+        ):
+            return False
+
+        _replace_file(staged_output, old_file)
+        return True
+    finally:
+        shutil.rmtree(stage_dir, ignore_errors=True)
 
 
 def apply_all_patches(
@@ -347,10 +505,18 @@ def count_patch_files(patch_root: str | Path = PATCH_read_DIR) -> int:
 def _verify_single(patch_path: Path, cancel_event=None) -> tuple[bool, Path]:
     """Verify a single .zst patch file with zstd -t. Returns (ok, patch_path)."""
 
+    stage_dir: str | None = None
+    zstd_path = str(patch_path)
     try:
-        # Per-process threads=1 to avoid CPU oversubscription when parallelized
+        if _external_path_is_long(patch_path):
+            stage_parent = str(Path(PATCH_out_DIR).parent)
+            os.makedirs(_python_io_path(stage_parent), exist_ok=True)
+            stage_dir = tempfile.mkdtemp(prefix="sierra_test_", dir=stage_parent)
+            zstd_path = os.path.join(stage_dir, "patch.zst")
+            _copy_file(patch_path, zstd_path)
+
         run_quiet(
-            [ZSTD_EXE, "-t", str(patch_path), "-T1"],
+            [ZSTD_EXE, "-t", zstd_path, "-T1"],
             check=True,
             capture=True,
             cancel_event=cancel_event,
@@ -358,6 +524,9 @@ def _verify_single(patch_path: Path, cancel_event=None) -> tuple[bool, Path]:
         return True, patch_path
     except subprocess.CalledProcessError:
         return False, patch_path
+    finally:
+        if stage_dir:
+            shutil.rmtree(stage_dir, ignore_errors=True)
 
 
 def verify_patch_files(
@@ -399,7 +568,7 @@ def verify_patch_files(
             with lock:
                 done += 1
                 if not ok:
-                    bad.append(p.name)
+                    bad.append(str(p))
 
             if fast_fail and len(bad) >= fast_fail and cancel_event:
                 cancel_event.set()
