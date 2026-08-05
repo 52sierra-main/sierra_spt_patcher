@@ -221,8 +221,13 @@ def generate_patches(
 
 # ----- INSTALLER -----
 
-def _apply_single(patch_file: Path, dest_dir: Path, cancel_event=None) -> bool:
-    rel = patch_file.relative_to(PATCH_read_DIR).with_suffix("")
+def _apply_single(
+    patch_file: Path,
+    dest_dir: Path,
+    patch_root: Path,
+    cancel_event=None,
+) -> bool:
+    rel = patch_file.relative_to(patch_root).with_suffix("")
     old_file = dest_dir / rel
 
     if not old_file.exists():
@@ -269,10 +274,16 @@ def apply_all_patches(
     on_progress=None,
     cancel_event=None,
     use_tqdm: bool = True,
+    patch_root: str | Path = PATCH_read_DIR,
 ) -> tuple[int, int, int]:
-    """Apply all patches; returns (total, succeeded, failed)."""
+    """Apply all patches; returns (total, succeeded, failed).
 
-    zstd_files = list(Path(PATCH_read_DIR).rglob("*.zst"))
+    patch_root defaults to the existing standalone package location, but can
+    point at a materialized web package cache.
+    """
+
+    patch_root = Path(patch_root)
+    zstd_files = list(patch_root.rglob("*.zst"))
     total = len(zstd_files)
 
     if not zstd_files:
@@ -292,7 +303,10 @@ def apply_all_patches(
         disable=_tqdm_disable() if use_tqdm else True,
     ) as bar:
         with ThreadPoolExecutor(max_workers=workers) as ex:
-            futs = {ex.submit(_apply_single, p, Path(dest_dir), cancel_event): p for p in zstd_files}
+            futs = {
+                ex.submit(_apply_single, p, Path(dest_dir), patch_root, cancel_event): p
+                for p in zstd_files
+            }
             for fut in as_completed(futs):
                 if cancel_event and cancel_event.is_set():
                     break
@@ -326,8 +340,8 @@ def count_dest_files(dest_root: str) -> int:
     return c
 
 
-def count_patch_files() -> int:
-    return sum(1 for _ in Path(PATCH_read_DIR).rglob("*.zst"))
+def count_patch_files(patch_root: str | Path = PATCH_read_DIR) -> int:
+    return sum(1 for _ in Path(patch_root).rglob("*.zst"))
 
 
 def _verify_single(patch_path: Path, cancel_event=None) -> tuple[bool, Path]:
