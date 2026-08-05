@@ -5,10 +5,12 @@ import json
 import os
 import re
 import shutil
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Callable
@@ -17,6 +19,9 @@ from typing import Callable
 # Fixed first-party repository root. Manifests never supply URLs.
 TRUSTED_REPOSITORY_BASE = "https://52sierra.net/patcher/repo/"
 DOWNLOAD_ATTEMPTS = 3
+DEFAULT_DOWNLOAD_WORKERS = 12
+DEFAULT_MATERIALIZE_WORKERS = 8
+_IO_BLOCK_SIZE = 4 * 1024 * 1024
 
 _OBJECT_RE = re.compile(r"^[0-9a-f]{64}$")
 _PACKAGE_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -26,20 +31,53 @@ class DownloadError(RuntimeError):
     pass
 
 
-def _sha256_file(path: Path, block_size: int = 4 * 1024 * 1024) -> str:
+def _io_path(path: str | Path) -> str:
+    """Return a Python I/O path that supports long absolute paths on Windows."""
+    value = os.path.abspath(os.fspath(path))
+    if os.name != "nt" or value.startswith("\\\\?\\"):
+        return value
+    if value.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + value[2:]
+    return "\\\\?\\" + value
+
+
+def _mkdir(path: str | Path) -> None:
+    os.makedirs(_io_path(path), exist_ok=True)
+
+
+def _exists(path: str | Path) -> bool:
+    return os.path.exists(_io_path(path))
+
+
+def _unlink(path: str | Path) -> None:
+    try:
+        os.unlink(_io_path(path))
+    except FileNotFoundError:
+        pass
+
+
+def _size(path: str | Path) -> int:
+    return os.path.getsize(_io_path(path))
+
+
+def _sha256_file(path: str | Path, block_size: int = _IO_BLOCK_SIZE) -> str:
     h = hashlib.sha256()
-    with path.open("rb") as f:
+    with open(_io_path(path), "rb") as stream:
         while True:
-            block = f.read(block_size)
+            block = stream.read(block_size)
             if not block:
                 break
             h.update(block)
     return h.hexdigest()
 
 
-def _verify_file(path: Path, expected_size: int | None, expected_sha256: str | None) -> bool:
+def _verify_file(
+    path: str | Path,
+    expected_size: int | None,
+    expected_sha256: str | None,
+) -> bool:
     try:
-        if expected_size is not None and path.stat().st_size != expected_size:
+        if expected_size is not None and _size(path) != expected_size:
             return False
         if expected_sha256 and _sha256_file(path).lower() != expected_sha256.lower():
             return False
@@ -106,21 +144,20 @@ def _stream_request(
     block_size: int = 1024 * 1024,
     on_progress: Callable[[str, int, int, str], None] | None = None,
 ) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    _mkdir(destination.parent)
     part = destination.with_suffix(destination.suffix + ".part")
 
-    # Only promote a prior .part without another request when we have enough
-    # metadata to verify it. Manifests are unsigned/unhashed in v1, so their
-    # partial files must always be fetched again.
+    # Only promote a prior .part without another request when enough metadata
+    # exists to verify it. Manifests are unsigned/unhashed in v1.
     if (
-        part.exists()
+        _exists(part)
         and (expected_size is not None or expected_sha256 is not None)
         and _verify_file(part, expected_size, expected_sha256)
     ):
-        os.replace(part, destination)
+        os.replace(_io_path(part), _io_path(destination))
         return
 
-    offset = part.stat().st_size if (resume and part.exists()) else 0
+    offset = _size(part) if (resume and _exists(part)) else 0
     headers = {
         "User-Agent": "SierraPatcher/1 web-delivery",
         "Accept-Encoding": "identity",
@@ -128,16 +165,13 @@ def _stream_request(
     if offset:
         headers["Range"] = f"bytes={offset}-"
 
-    req = urllib.request.Request(url, headers=headers, method="GET")
-    opener = _opener()
+    request = urllib.request.Request(url, headers=headers, method="GET")
 
     try:
-        response = opener.open(req, timeout=30)
-    except urllib.error.HTTPError as e:
-        # Some origins refuse Range. Restart once from zero rather than append
-        # a non-range response to a partial file.
-        if offset and e.code in (400, 404, 416):
-            part.unlink(missing_ok=True)
+        response = _opener().open(request, timeout=30)
+    except urllib.error.HTTPError as exc:
+        if offset and exc.code in (400, 404, 416):
+            _unlink(part)
             return _stream_request(
                 url,
                 destination,
@@ -147,15 +181,15 @@ def _stream_request(
                 block_size=block_size,
                 on_progress=on_progress,
             )
-        raise DownloadError(f"HTTP error {e.code} for {url}") from e
-    except OSError as e:
-        raise DownloadError(f"download failed for {url}: {e}") from e
+        raise DownloadError(f"HTTP error {exc.code} for {url}") from exc
+    except OSError as exc:
+        raise DownloadError(f"download failed for {url}: {exc}") from exc
 
     status = getattr(response, "status", None)
     content_range = response.headers.get("Content-Range", "")
     if offset and (status != 206 or not content_range.startswith(f"bytes {offset}-")):
         response.close()
-        part.unlink(missing_ok=True)
+        _unlink(part)
         return _stream_request(
             url,
             destination,
@@ -169,33 +203,37 @@ def _stream_request(
     mode = "ab" if offset else "wb"
     current = offset
     try:
-        with response, part.open(mode) as out:
+        with response, open(_io_path(part), mode) as output:
             while True:
                 block = response.read(block_size)
                 if not block:
                     break
-                out.write(block)
+                output.write(block)
                 current += len(block)
                 if on_progress:
-                    total = expected_size or max(current, 1)
-                    on_progress("web:download", current, total, destination.name)
-    except Exception as e:
-        # Keep the partial bytes. A retry can continue with HTTP Range.
-        raise DownloadError(f"stream interrupted for {destination.name}: {e}") from e
+                    on_progress(
+                        "web:download-bytes",
+                        current,
+                        expected_size or max(current, 1),
+                        destination.name,
+                    )
+    except Exception as exc:
+        # Keep partial bytes. A retry can continue with HTTP Range.
+        raise DownloadError(f"stream interrupted for {destination.name}: {exc}") from exc
 
     if not _verify_file(part, expected_size, expected_sha256):
-        # A file at/above its expected length with a bad hash cannot be resumed
-        # safely. Short files remain as .part for the next Range request.
+        # A full-length object with a bad hash is not resumable. Short objects
+        # remain as .part for the next Range request.
         if (
             expected_sha256
-            and part.exists()
+            and _exists(part)
             and expected_size is not None
-            and part.stat().st_size >= expected_size
+            and _size(part) >= expected_size
         ):
-            part.unlink(missing_ok=True)
+            _unlink(part)
         raise DownloadError(f"download verification failed for {destination.name}")
 
-    os.replace(part, destination)
+    os.replace(_io_path(part), _io_path(destination))
 
 
 def _download_with_retries(
@@ -219,8 +257,8 @@ def _download_with_retries(
                 on_progress=on_progress,
             )
             return
-        except DownloadError as e:
-            last_error = e
+        except DownloadError as exc:
+            last_error = exc
             if attempt < DOWNLOAD_ATTEMPTS:
                 time.sleep(min(2 ** (attempt - 1), 4))
     raise DownloadError(
@@ -240,9 +278,10 @@ def fetch_manifest(package_id: str, cache_root: str | Path) -> dict:
     )
 
     try:
-        data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except Exception as e:
-        raise DownloadError("downloaded manifest is not valid JSON") from e
+        with open(_io_path(manifest_path), "r", encoding="utf-8") as stream:
+            data = json.load(stream)
+    except Exception as exc:
+        raise DownloadError("downloaded manifest is not valid JSON") from exc
 
     if data.get("format_version") != 1:
         raise DownloadError(f"unsupported manifest version: {data.get('format_version')!r}")
@@ -255,8 +294,6 @@ def fetch_manifest(package_id: str, cache_root: str | Path) -> dict:
 
 
 def _safe_logical_path(value: str) -> Path:
-    # Manifest paths use a platform-independent POSIX representation. Reject
-    # Windows separators/drives explicitly before converting to a local Path.
     if not value or "\\" in value:
         raise DownloadError(f"unsafe package path: {value}")
 
@@ -272,6 +309,20 @@ def _safe_logical_path(value: str) -> Path:
 
 
 @dataclass(frozen=True)
+class _ObjectSpec:
+    object_id: str
+    size: int
+
+
+@dataclass(frozen=True)
+class _FileSpec:
+    path: Path
+    size: int
+    sha256: str
+    objects: tuple[_ObjectSpec, ...]
+
+
+@dataclass(frozen=True)
 class MaterializedPackage:
     root: Path
     patch_root: Path
@@ -279,22 +330,12 @@ class MaterializedPackage:
     manifest_path: Path
 
 
-def materialize_web_package(
-    package_id: str,
-    cache_root: str | Path,
-    *,
-    on_progress: Callable[[str, int, int, str], None] | None = None,
-) -> MaterializedPackage:
-    cache_root = Path(cache_root).resolve()
-    manifest = fetch_manifest(package_id, cache_root)
-
-    object_cache = cache_root / "objects"
-    package_root = cache_root / "packages" / _package_id(package_id)
-    package_root.mkdir(parents=True, exist_ok=True)
-
-    files = manifest["files"]
+def _parse_manifest(manifest: dict) -> tuple[list[_FileSpec], dict[str, int]]:
+    files: list[_FileSpec] = []
+    objects_by_id: dict[str, int] = {}
     seen_paths: set[str] = set()
-    for index, entry in enumerate(files, start=1):
+
+    for entry in manifest["files"]:
         if not isinstance(entry, dict):
             raise DownloadError("invalid manifest file entry")
 
@@ -304,66 +345,282 @@ def materialize_web_package(
             raise DownloadError(f"duplicate package path in manifest: {rel}")
         seen_paths.add(rel_key)
 
-        expected_size = int(entry.get("size", -1))
-        expected_hash = str(entry.get("sha256", "")).lower()
-        objects = entry.get("objects")
+        try:
+            expected_size = int(entry.get("size", -1))
+        except (TypeError, ValueError) as exc:
+            raise DownloadError(f"invalid file size for {rel}") from exc
 
+        expected_hash = str(entry.get("sha256", "")).lower()
+        raw_objects = entry.get("objects")
         if expected_size < 0 or not _OBJECT_RE.fullmatch(expected_hash):
             raise DownloadError(f"invalid file metadata for {rel}")
-        if not isinstance(objects, list):
+        if not isinstance(raw_objects, list):
             raise DownloadError(f"objects must be a list for {rel}")
 
-        final_path = package_root / rel
-        final_path.parent.mkdir(parents=True, exist_ok=True)
+        object_specs: list[_ObjectSpec] = []
+        object_bytes = 0
+        for raw_object in raw_objects:
+            if not isinstance(raw_object, dict):
+                raise DownloadError(f"invalid object entry for {rel}")
+            object_id = _object_id(str(raw_object.get("id", "")))
+            try:
+                object_size = int(raw_object.get("size", -1))
+            except (TypeError, ValueError) as exc:
+                raise DownloadError(f"invalid object size for {object_id}") from exc
+            if object_size <= 0:
+                raise DownloadError(f"invalid object size for {object_id}")
 
-        if final_path.exists() and _verify_file(final_path, expected_size, expected_hash):
-            if on_progress:
-                on_progress("web:materialize", index, len(files), f"Cached: {rel}")
-            continue
+            prior_size = objects_by_id.get(object_id)
+            if prior_size is not None and prior_size != object_size:
+                raise DownloadError(f"conflicting object sizes for {object_id}")
+            objects_by_id[object_id] = object_size
+            object_specs.append(_ObjectSpec(object_id, object_size))
+            object_bytes += object_size
 
-        temp_final = final_path.with_suffix(final_path.suffix + ".assembling")
-        temp_final.unlink(missing_ok=True)
+        if object_bytes != expected_size:
+            raise DownloadError(
+                f"object sizes do not reconstruct {rel}: "
+                f"expected {expected_size}, manifest has {object_bytes}"
+            )
 
-        file_hash = hashlib.sha256()
-        written = 0
-        with temp_final.open("wb") as assembled:
-            for obj in objects:
-                if not isinstance(obj, dict):
-                    raise DownloadError(f"invalid object entry for {rel}")
-                oid = _object_id(str(obj.get("id", "")))
-                osize = int(obj.get("size", -1))
-                if osize < 0:
-                    raise DownloadError(f"invalid object size for {oid}")
+        files.append(
+            _FileSpec(
+                path=rel,
+                size=expected_size,
+                sha256=expected_hash,
+                objects=tuple(object_specs),
+            )
+        )
 
-                local_object = object_cache / oid[:2] / oid
-                if not _verify_file(local_object, osize, oid):
-                    local_object.unlink(missing_ok=True)
-                    _download_with_retries(
-                        _object_url(oid),
-                        local_object,
-                        expected_size=osize,
-                        expected_sha256=oid,
-                        resume=True,
-                        on_progress=on_progress,
-                    )
+    return files, objects_by_id
 
-                with local_object.open("rb") as src:
+
+class _ObjectProgress:
+    def __init__(
+        self,
+        object_sizes: dict[str, int],
+        callback: Callable[[str, int, int, str], None] | None,
+    ):
+        self._sizes = object_sizes
+        self._callback = callback
+        self._values: dict[str, int] = {}
+        self._completed: set[str] = set()
+        self._current_bytes = 0
+        self._total_bytes = sum(object_sizes.values())
+        self._lock = threading.Lock()
+
+    def update(self, object_id: str, current: int, message: str = "") -> None:
+        if not self._callback:
+            return
+        expected = self._sizes[object_id]
+        value = max(0, min(int(current), expected))
+        with self._lock:
+            previous = self._values.get(object_id, 0)
+            self._values[object_id] = value
+            self._current_bytes += value - previous
+            if value >= expected:
+                self._completed.add(object_id)
+            completed = len(self._completed)
+            total_objects = len(self._sizes)
+            current_bytes = self._current_bytes
+            total_bytes = max(self._total_bytes, 1)
+        self._callback(
+            "web:objects",
+            current_bytes,
+            total_bytes,
+            f"{completed}/{total_objects} objects {message}".strip(),
+        )
+
+    def complete(self, object_id: str, message: str = "") -> None:
+        self.update(object_id, self._sizes[object_id], message)
+
+
+def _ensure_object(
+    object_id: str,
+    object_size: int,
+    object_cache: Path,
+    progress: _ObjectProgress,
+) -> str:
+    destination = object_cache / object_id[:2] / object_id
+
+    # Final object files are only created after SHA-256 verification. Reusing a
+    # final cache entry by size avoids rehashing every object on each restart;
+    # complete reconstructed files are still verified against the manifest.
+    if _exists(destination) and _size(destination) == object_size:
+        progress.complete(object_id, "cached")
+        return "cached"
+
+    if _exists(destination):
+        _unlink(destination)
+
+    def object_progress(_phase: str, current: int, _total: int, _message: str) -> None:
+        progress.update(object_id, current, destination.name[:12])
+
+    _download_with_retries(
+        _object_url(object_id),
+        destination,
+        expected_size=object_size,
+        expected_sha256=object_id,
+        resume=True,
+        on_progress=object_progress,
+    )
+    progress.complete(object_id, "downloaded")
+    return "downloaded"
+
+
+def _download_objects(
+    objects_by_id: dict[str, int],
+    object_cache: Path,
+    *,
+    workers: int,
+    on_progress: Callable[[str, int, int, str], None] | None,
+) -> None:
+    if not objects_by_id:
+        if on_progress:
+            on_progress("web:objects", 1, 1, "No objects required")
+        return
+
+    max_workers = max(1, min(int(workers), 64))
+    progress = _ObjectProgress(objects_by_id, on_progress)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(
+                _ensure_object,
+                object_id,
+                object_size,
+                object_cache,
+                progress,
+            ): object_id
+            for object_id, object_size in objects_by_id.items()
+        }
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception:
+                for pending in futures:
+                    pending.cancel()
+                raise
+
+
+def _materialize_one_file(
+    spec: _FileSpec,
+    package_root: Path,
+    object_cache: Path,
+) -> str:
+    final_path = package_root / spec.path
+    _mkdir(final_path.parent)
+
+    if _exists(final_path) and _verify_file(final_path, spec.size, spec.sha256):
+        return "cached"
+
+    temp_path = final_path.with_name(
+        f"{final_path.name}.assembling-{os.getpid()}-{threading.get_ident()}"
+    )
+    _unlink(temp_path)
+
+    file_hash = hashlib.sha256()
+    written = 0
+    try:
+        with open(_io_path(temp_path), "wb") as assembled:
+            for object_spec in spec.objects:
+                local_object = (
+                    object_cache
+                    / object_spec.object_id[:2]
+                    / object_spec.object_id
+                )
+                if not _exists(local_object) or _size(local_object) != object_spec.size:
+                    raise DownloadError(f"required object is missing: {object_spec.object_id}")
+
+                with open(_io_path(local_object), "rb") as source:
                     while True:
-                        block = src.read(4 * 1024 * 1024)
+                        block = source.read(_IO_BLOCK_SIZE)
                         if not block:
                             break
                         assembled.write(block)
                         file_hash.update(block)
                         written += len(block)
 
-        if written != expected_size or file_hash.hexdigest() != expected_hash:
-            temp_final.unlink(missing_ok=True)
-            raise DownloadError(f"reconstructed file verification failed: {rel}")
+        if written != spec.size or file_hash.hexdigest() != spec.sha256:
+            raise DownloadError(f"reconstructed file verification failed: {spec.path}")
 
-        os.replace(temp_final, final_path)
+        os.replace(_io_path(temp_path), _io_path(final_path))
+        return "ready"
+    finally:
+        _unlink(temp_path)
 
+
+def _materialize_files(
+    files: list[_FileSpec],
+    package_root: Path,
+    object_cache: Path,
+    *,
+    workers: int,
+    on_progress: Callable[[str, int, int, str], None] | None,
+) -> None:
+    if not files:
         if on_progress:
-            on_progress("web:materialize", index, len(files), f"Ready: {rel}")
+            on_progress("web:materialize", 1, 1, "No package files")
+        return
+
+    max_workers = max(1, min(int(workers), 32))
+    completed = 0
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(_materialize_one_file, spec, package_root, object_cache): spec
+            for spec in files
+        }
+        for future in as_completed(futures):
+            spec = futures[future]
+            try:
+                result = future.result()
+            except Exception:
+                for pending in futures:
+                    pending.cancel()
+                raise
+            completed += 1
+            if on_progress:
+                on_progress(
+                    "web:materialize",
+                    completed,
+                    len(files),
+                    f"{result}: {spec.path.as_posix()}",
+                )
+
+
+def materialize_web_package(
+    package_id: str,
+    cache_root: str | Path,
+    *,
+    download_workers: int = DEFAULT_DOWNLOAD_WORKERS,
+    materialize_workers: int = DEFAULT_MATERIALIZE_WORKERS,
+    on_progress: Callable[[str, int, int, str], None] | None = None,
+) -> MaterializedPackage:
+    cache_root = Path(cache_root).resolve()
+    if on_progress:
+        on_progress("web:manifest", 0, 1, "Downloading manifest")
+    manifest = fetch_manifest(package_id, cache_root)
+    if on_progress:
+        on_progress("web:manifest", 1, 1, "Manifest ready")
+
+    files, objects_by_id = _parse_manifest(manifest)
+    object_cache = cache_root / "objects"
+    package_root = cache_root / "packages" / _package_id(package_id)
+    _mkdir(package_root)
+
+    _download_objects(
+        objects_by_id,
+        object_cache,
+        workers=download_workers,
+        on_progress=on_progress,
+    )
+    _materialize_files(
+        files,
+        package_root,
+        object_cache,
+        workers=materialize_workers,
+        on_progress=on_progress,
+    )
 
     manifest_path = cache_root / "manifests" / package_id / "manifest.json"
     return MaterializedPackage(
@@ -377,4 +634,4 @@ def materialize_web_package(
 def clear_materialized_package(package_id: str, cache_root: str | Path) -> None:
     """Remove reconstructed package files while retaining verified object cache."""
     root = Path(cache_root) / "packages" / _package_id(package_id)
-    shutil.rmtree(root, ignore_errors=True)
+    shutil.rmtree(_io_path(root), ignore_errors=True)
