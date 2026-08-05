@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,16 @@ class HygieneReport:
     removed_bytes: int = 0
     remaining_files: int = 0
     remaining_bytes: int = 0
+
+
+def _python_io_path(path: str | Path) -> str:
+    """Return a Python I/O path that also supports long absolute paths on Windows."""
+    value = os.path.abspath(os.fspath(path))
+    if os.name != "nt" or value.startswith("\\\\?\\"):
+        return value
+    if value.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + value[2:]
+    return "\\\\?\\" + value
 
 
 def relative_package_path(path: str | Path, root: str | Path) -> Path:
@@ -41,9 +52,10 @@ def is_package_excluded(path: str | Path, root: str | Path) -> bool:
 
 
 def copy_package_file(src: str | Path, package_root: str | Path, rel: str | Path) -> None:
+    """Copy a file into the mirrored package tree, including >260-char Windows paths."""
     dst = Path(package_root) / Path(rel)
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, dst)
+    os.makedirs(_python_io_path(dst.parent), exist_ok=True)
+    shutil.copy2(_python_io_path(src), _python_io_path(dst))
 
 
 def prune_package_exclusions(root: str | Path) -> HygieneReport:
@@ -66,7 +78,11 @@ def prune_package_exclusions(root: str | Path) -> HygieneReport:
             path.unlink(missing_ok=True)
             removed_files += 1
 
-    for path in sorted((p for p in root_path.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
+    for path in sorted(
+        (p for p in root_path.rglob("*") if p.is_dir()),
+        key=lambda p: len(p.parts),
+        reverse=True,
+    ):
         if not path.exists():
             continue
         if path.name in IGNORED_DIRS or not any(path.iterdir()):
