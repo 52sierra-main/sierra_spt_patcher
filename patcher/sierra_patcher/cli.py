@@ -32,10 +32,12 @@ _DEF_DELETE_LIST_read = str(Path(STORAGE_read_DIR) / "delete_list.txt")
 _DEF_INFO_PATH_read = str(Path(STORAGE_read_DIR) / "metadata.info")
 
 
+# Keep CLI generation behavior aligned with the tested GUI presets. In
+# particular, zstd patch-from needs the long window for large Tarkov files.
 _DIFF_PRESETS: dict[str, list[str]] = {
-    "fast": ["-3"],
-    "balanced": ["-10", "--long=27"],
-    "aggressive": ["--ultra", "-19", "--long=31"],
+    "fast": ["-3", "--long=31"],
+    "balanced": ["-10", "--long=31"],
+    "aggressive": ["--ultra", "-22", "--long=31"],
 }
 
 
