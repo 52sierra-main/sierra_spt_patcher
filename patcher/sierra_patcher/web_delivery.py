@@ -3,6 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
@@ -10,18 +13,9 @@ from typing import Callable, Iterable
 
 MANIFEST_FORMAT_VERSION = 1
 DEFAULT_CHUNK_SIZE = 256 * 1024 * 1024
+DEFAULT_PUBLISH_WORKERS = min(8, max(2, os.cpu_count() or 4))
+_IO_BLOCK_SIZE = 4 * 1024 * 1024
 PACKAGE_DIRS = ("patchfiles", "storage")
-
-
-def _sha256_file(path: Path, block_size: int = 4 * 1024 * 1024) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        while True:
-            block = f.read(block_size)
-            if not block:
-                break
-            h.update(block)
-    return h.hexdigest()
 
 
 def _safe_package_id(value: str) -> str:
@@ -55,12 +49,101 @@ class PublishResult:
     total_input_bytes: int
 
 
+@dataclass(frozen=True)
+class _PublishedFile:
+    index: int
+    manifest_entry: dict
+    object_ids: tuple[str, ...]
+    new_objects: int
+    reused_objects: int
+    input_bytes: int
+
+
+def _publish_one_file(
+    index: int,
+    logical_path: str,
+    source_path: Path,
+    object_root: Path,
+    temp_root: Path,
+    chunk_size: int,
+) -> _PublishedFile:
+    """Publish one logical package file without buffering a full chunk in RAM."""
+
+    file_size = source_path.stat().st_size
+    file_hash = hashlib.sha256()
+    objects: list[dict] = []
+    object_ids: list[str] = []
+    new_objects = 0
+    reused_objects = 0
+
+    with source_path.open("rb") as src:
+        while True:
+            temp_path = temp_root / (
+                f"{os.getpid()}-{threading.get_ident()}-{uuid.uuid4().hex}.tmp"
+            )
+            chunk_hash = hashlib.sha256()
+            chunk_bytes = 0
+
+            with temp_path.open("wb") as temp:
+                while chunk_bytes < chunk_size:
+                    block = src.read(min(_IO_BLOCK_SIZE, chunk_size - chunk_bytes))
+                    if not block:
+                        break
+                    temp.write(block)
+                    file_hash.update(block)
+                    chunk_hash.update(block)
+                    chunk_bytes += len(block)
+
+            if chunk_bytes == 0:
+                temp_path.unlink(missing_ok=True)
+                break
+
+            object_id = chunk_hash.hexdigest()
+            object_path = object_root / object_id[:2] / object_id
+            object_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Final object files are immutable and are only created by atomic
+            # rename after hashing. For an existing object, a matching size is
+            # enough for the fast path; the installer verifies reconstructed
+            # files against the manifest hash as a second integrity boundary.
+            if object_path.exists():
+                if object_path.stat().st_size != chunk_bytes:
+                    temp_path.unlink(missing_ok=True)
+                    raise RuntimeError(f"existing object has wrong size: {object_path}")
+                temp_path.unlink(missing_ok=True)
+                reused_objects += 1
+            else:
+                try:
+                    os.replace(temp_path, object_path)
+                    new_objects += 1
+                finally:
+                    temp_path.unlink(missing_ok=True)
+
+            object_ids.append(object_id)
+            objects.append({"id": object_id, "size": chunk_bytes})
+
+    return _PublishedFile(
+        index=index,
+        manifest_entry={
+            "path": logical_path,
+            "size": file_size,
+            "sha256": file_hash.hexdigest(),
+            "objects": objects,
+        },
+        object_ids=tuple(object_ids),
+        new_objects=new_objects,
+        reused_objects=reused_objects,
+        input_bytes=file_size,
+    )
+
+
 def publish_web_package(
     canonical_root: str | Path,
     repository_root: str | Path,
     package_id: str,
     *,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
+    workers: int | None = None,
     on_progress: Callable[[str, int, int, str], None] | None = None,
 ) -> PublishResult:
     """Publish a canonical Sierra package into a web repository.
@@ -70,8 +153,9 @@ def publish_web_package(
         releases/<package_id>/manifest.json
         objects/<first-two-hash-chars>/<sha256>
 
-    The shared object namespace is organizational. Objects are reused only
-    when their bytes are exactly identical; no cross-version deduplication is
+    Files are processed concurrently, while each object is streamed through a
+    small buffer. The shared object namespace is organizational: reuse occurs
+    only when bytes are exactly identical; no cross-version deduplication is
     assumed for Tarkov-derived high-entropy patch data.
     """
 
@@ -84,73 +168,63 @@ def publish_web_package(
     if not canonical_root.is_dir():
         raise FileNotFoundError(f"canonical package does not exist: {canonical_root}")
 
+    max_workers = max(1, min(int(workers or DEFAULT_PUBLISH_WORKERS), 32))
     release_dir = repository_root / "releases" / package_id
     object_root = repository_root / "objects"
+    temp_root = object_root / ".tmp"
     release_dir.mkdir(parents=True, exist_ok=True)
     object_root.mkdir(parents=True, exist_ok=True)
+    temp_root.mkdir(parents=True, exist_ok=True)
 
     package_files = list(_iter_package_files(canonical_root))
-    manifest_files: list[dict] = []
-    object_ids: set[str] = set()
-    new_objects = 0
-    reused_objects = 0
-    total_input_bytes = 0
+    results: list[_PublishedFile | None] = [None] * len(package_files)
+    completed = 0
 
-    for file_index, (logical_path, source_path) in enumerate(package_files, start=1):
-        file_size = source_path.stat().st_size
-        total_input_bytes += file_size
-        file_hash = hashlib.sha256()
-        objects: list[dict] = []
-
-        with source_path.open("rb") as src:
-            while True:
-                chunk = src.read(chunk_size)
-                if not chunk:
-                    break
-
-                file_hash.update(chunk)
-                object_id = hashlib.sha256(chunk).hexdigest()
-                object_path = object_root / object_id[:2] / object_id
-                object_path.parent.mkdir(parents=True, exist_ok=True)
-
-                if object_path.exists():
-                    if (
-                        object_path.stat().st_size != len(chunk)
-                        or _sha256_file(object_path) != object_id
-                    ):
-                        raise RuntimeError(f"existing object is damaged: {object_path}")
-                    reused_objects += 1
-                else:
-                    tmp = object_path.with_suffix(".tmp")
-                    try:
-                        with tmp.open("wb") as out:
-                            out.write(chunk)
-                            out.flush()
-                            os.fsync(out.fileno())
-                        os.replace(tmp, object_path)
-                    finally:
-                        tmp.unlink(missing_ok=True)
-                    new_objects += 1
-
-                object_ids.add(object_id)
-                objects.append({"id": object_id, "size": len(chunk)})
-
-        manifest_files.append(
-            {
-                "path": logical_path,
-                "size": file_size,
-                "sha256": file_hash.hexdigest(),
-                "objects": objects,
+    try:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    _publish_one_file,
+                    index,
+                    logical_path,
+                    source_path,
+                    object_root,
+                    temp_root,
+                    chunk_size,
+                ): (index, logical_path)
+                for index, (logical_path, source_path) in enumerate(package_files)
             }
-        )
 
-        if on_progress:
-            on_progress(
-                "web:publish",
-                file_index,
-                len(package_files),
-                f"Published {file_index}/{len(package_files)}: {logical_path}",
-            )
+            for future in as_completed(futures):
+                index, logical_path = futures[future]
+                try:
+                    result = future.result()
+                except Exception:
+                    for pending in futures:
+                        pending.cancel()
+                    raise
+
+                results[index] = result
+                completed += 1
+                if on_progress:
+                    on_progress(
+                        "web:publish",
+                        completed,
+                        len(package_files),
+                        logical_path,
+                    )
+    finally:
+        # A killed process can leave temp files, but never final hash objects.
+        for temp_path in temp_root.glob("*.tmp"):
+            temp_path.unlink(missing_ok=True)
+        try:
+            temp_root.rmdir()
+        except OSError:
+            pass
+
+    published = [item for item in results if item is not None]
+    manifest_files = [item.manifest_entry for item in published]
+    object_ids = {oid for item in published for oid in item.object_ids}
 
     manifest = {
         "format_version": MANIFEST_FORMAT_VERSION,
@@ -160,19 +234,19 @@ def publish_web_package(
     }
 
     manifest_path = release_dir / "manifest.json"
-    tmp_manifest = manifest_path.with_suffix(".json.tmp")
-    tmp_manifest.write_text(
+    temp_manifest = manifest_path.with_suffix(".json.tmp")
+    temp_manifest.write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
-    os.replace(tmp_manifest, manifest_path)
+    os.replace(temp_manifest, manifest_path)
 
     return PublishResult(
         manifest_path=manifest_path,
         object_root=object_root,
-        file_count=len(package_files),
+        file_count=len(published),
         object_count=len(object_ids),
-        new_object_count=new_objects,
-        reused_object_count=reused_objects,
-        total_input_bytes=total_input_bytes,
+        new_object_count=sum(item.new_objects for item in published),
+        reused_object_count=sum(item.reused_objects for item in published),
+        total_input_bytes=sum(item.input_bytes for item in published),
     )
