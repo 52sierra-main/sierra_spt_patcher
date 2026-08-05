@@ -18,6 +18,11 @@ _IO_BLOCK_SIZE = 4 * 1024 * 1024
 PACKAGE_DIRS = ("patchfiles", "storage")
 
 
+def _raise_if_cancelled(cancel_event) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise RuntimeError("web package publishing cancelled")
+
+
 def _safe_package_id(value: str) -> str:
     value = value.strip()
     if not value:
@@ -66,9 +71,11 @@ def _publish_one_file(
     object_root: Path,
     temp_root: Path,
     chunk_size: int,
+    cancel_event=None,
 ) -> _PublishedFile:
     """Publish one logical package file without buffering a full chunk in RAM."""
 
+    _raise_if_cancelled(cancel_event)
     file_size = source_path.stat().st_size
     file_hash = hashlib.sha256()
     objects: list[dict] = []
@@ -78,50 +85,50 @@ def _publish_one_file(
 
     with source_path.open("rb") as src:
         while True:
+            _raise_if_cancelled(cancel_event)
             temp_path = temp_root / (
                 f"{os.getpid()}-{threading.get_ident()}-{uuid.uuid4().hex}.tmp"
             )
             chunk_hash = hashlib.sha256()
             chunk_bytes = 0
 
-            with temp_path.open("wb") as temp:
-                while chunk_bytes < chunk_size:
-                    block = src.read(min(_IO_BLOCK_SIZE, chunk_size - chunk_bytes))
-                    if not block:
-                        break
-                    temp.write(block)
-                    file_hash.update(block)
-                    chunk_hash.update(block)
-                    chunk_bytes += len(block)
+            try:
+                with temp_path.open("wb") as temp:
+                    while chunk_bytes < chunk_size:
+                        _raise_if_cancelled(cancel_event)
+                        block = src.read(min(_IO_BLOCK_SIZE, chunk_size - chunk_bytes))
+                        if not block:
+                            break
+                        temp.write(block)
+                        file_hash.update(block)
+                        chunk_hash.update(block)
+                        chunk_bytes += len(block)
 
-            if chunk_bytes == 0:
-                temp_path.unlink(missing_ok=True)
-                break
+                if chunk_bytes == 0:
+                    break
 
-            object_id = chunk_hash.hexdigest()
-            object_path = object_root / object_id[:2] / object_id
-            object_path.parent.mkdir(parents=True, exist_ok=True)
+                _raise_if_cancelled(cancel_event)
+                object_id = chunk_hash.hexdigest()
+                object_path = object_root / object_id[:2] / object_id
+                object_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Final object files are immutable and are only created by atomic
-            # rename after hashing. For an existing object, a matching size is
-            # enough for the fast path; the installer verifies reconstructed
-            # files against the manifest hash as a second integrity boundary.
-            if object_path.exists():
-                if object_path.stat().st_size != chunk_bytes:
-                    temp_path.unlink(missing_ok=True)
-                    raise RuntimeError(f"existing object has wrong size: {object_path}")
-                temp_path.unlink(missing_ok=True)
-                reused_objects += 1
-            else:
-                try:
+                # Final object files are immutable and appear only after an
+                # atomic rename. Exact-byte reuse is incidental, not assumed.
+                if object_path.exists():
+                    if object_path.stat().st_size != chunk_bytes:
+                        raise RuntimeError(f"existing object has wrong size: {object_path}")
+                    reused_objects += 1
+                else:
+                    _raise_if_cancelled(cancel_event)
                     os.replace(temp_path, object_path)
                     new_objects += 1
-                finally:
-                    temp_path.unlink(missing_ok=True)
 
-            object_ids.append(object_id)
-            objects.append({"id": object_id, "size": chunk_bytes})
+                object_ids.append(object_id)
+                objects.append({"id": object_id, "size": chunk_bytes})
+            finally:
+                temp_path.unlink(missing_ok=True)
 
+    _raise_if_cancelled(cancel_event)
     return _PublishedFile(
         index=index,
         manifest_entry={
@@ -145,6 +152,7 @@ def publish_web_package(
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     workers: int | None = None,
     on_progress: Callable[[str, int, int, str], None] | None = None,
+    cancel_event=None,
 ) -> PublishResult:
     """Publish a canonical Sierra package into a web repository.
 
@@ -153,12 +161,11 @@ def publish_web_package(
         releases/<package_id>/manifest.json
         objects/<first-two-hash-chars>/<sha256>
 
-    Files are processed concurrently, while each object is streamed through a
-    small buffer. The shared object namespace is organizational: reuse occurs
-    only when bytes are exactly identical; no cross-version deduplication is
-    assumed for Tarkov-derived high-entropy patch data.
+    Cancellation never publishes a manifest. Completed immutable objects are
+    retained and can be reused by a later publishing attempt.
     """
 
+    _raise_if_cancelled(cancel_event)
     canonical_root = Path(canonical_root).resolve()
     repository_root = Path(repository_root).resolve()
     package_id = _safe_package_id(package_id)
@@ -191,11 +198,17 @@ def publish_web_package(
                     object_root,
                     temp_root,
                     chunk_size,
+                    cancel_event,
                 ): (index, logical_path)
                 for index, (logical_path, source_path) in enumerate(package_files)
             }
 
             for future in as_completed(futures):
+                if cancel_event is not None and cancel_event.is_set():
+                    for pending in futures:
+                        pending.cancel()
+                    _raise_if_cancelled(cancel_event)
+
                 index, logical_path = futures[future]
                 try:
                     result = future.result()
@@ -207,14 +220,8 @@ def publish_web_package(
                 results[index] = result
                 completed += 1
                 if on_progress:
-                    on_progress(
-                        "web:publish",
-                        completed,
-                        len(package_files),
-                        logical_path,
-                    )
+                    on_progress("web:publish", completed, len(package_files), logical_path)
     finally:
-        # A killed process can leave temp files, but never final hash objects.
         for temp_path in temp_root.glob("*.tmp"):
             temp_path.unlink(missing_ok=True)
         try:
@@ -222,10 +229,13 @@ def publish_web_package(
         except OSError:
             pass
 
+    _raise_if_cancelled(cancel_event)
     published = [item for item in results if item is not None]
+    if len(published) != len(package_files):
+        raise RuntimeError("web package publishing ended before every file completed")
+
     manifest_files = [item.manifest_entry for item in published]
     object_ids = {oid for item in published for oid in item.object_ids}
-
     manifest = {
         "format_version": MANIFEST_FORMAT_VERSION,
         "package_id": package_id,
@@ -235,11 +245,15 @@ def publish_web_package(
 
     manifest_path = release_dir / "manifest.json"
     temp_manifest = manifest_path.with_suffix(".json.tmp")
-    temp_manifest.write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    os.replace(temp_manifest, manifest_path)
+    try:
+        temp_manifest.write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        _raise_if_cancelled(cancel_event)
+        os.replace(temp_manifest, manifest_path)
+    finally:
+        temp_manifest.unlink(missing_ok=True)
 
     return PublishResult(
         manifest_path=manifest_path,
