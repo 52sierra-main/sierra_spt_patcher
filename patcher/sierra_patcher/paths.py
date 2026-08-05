@@ -24,13 +24,23 @@ ZSTD_DIR: Path   = BIN_DIR / "zstd64"
 ZSTD_EXE: str    = str(ZSTD_DIR / "zstd.exe")
 SEVENZIP: str= str(BIN_DIR / "7za.exe")
 
-# ---- Outputs (next to the running executable) ----
+# ---- Runtime/package working directory ----
 def _working_dir() -> Path:
-    # Frozen: folder containing your .exe; Dev: current cwd (or choose PKG_ROOT.parent)
-    try:
-        return Path(sys.executable).resolve().parent
-    except Exception:
-        return Path.cwd()
+    """Directory used for package input/output beside the application.
+
+    Frozen builds use the directory containing the public EXE.
+    Source/dev runs use the project root containing sierra_patcher/ and bin/.
+
+    Do not use sys.executable for source runs: inside a virtual environment
+    that points to .venv/Scripts/python.exe and incorrectly places generated
+    packages under .venv/Scripts.
+    """
+    if getattr(sys, "frozen", False):
+        try:
+            return Path(sys.executable).resolve().parent
+        except Exception:
+            return Path.cwd()
+    return PKG_ROOT.parent
 
 WORKING_DIR: Path = _working_dir()
 OUTPUT_DIR: str   = str(WORKING_DIR / "patch_output")
@@ -43,9 +53,10 @@ MISSING_read_DIR: str  = str(Path(WORKING_DIR) / "additional_files")
 STORAGE_read_DIR: str  = str(Path(WORKING_DIR) / "storage")
 
 __all__ = [
-    "PKG_ROOT", "APP_ROOT",
+    "PKG_ROOT", "APP_ROOT", "WORKING_DIR",
     "ASSET_DIR", "TITLE",
     "BIN_DIR", "ZSTD_DIR",
     "ZSTD_EXE", "SEVENZIP",
-    "OUTPUT_DIR", "PATCH_out_DIR", "MISSING_out_DIR", "STORAGE_out_DIR","PATCH_read_DIR", "MISSING_read_DIR","STORAGE_read_DIR",
+    "OUTPUT_DIR", "PATCH_out_DIR", "MISSING_out_DIR", "STORAGE_out_DIR",
+    "PATCH_read_DIR", "MISSING_read_DIR", "STORAGE_read_DIR",
 ]
