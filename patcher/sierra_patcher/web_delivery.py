@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
+from .web_catalog import build_catalog
+
 
 MANIFEST_FORMAT_VERSION = 1
 DEFAULT_CHUNK_SIZE = 256 * 1024 * 1024
@@ -43,10 +45,64 @@ def _iter_package_files(canonical_root: Path) -> Iterable[tuple[str, Path]]:
                 yield path.relative_to(canonical_root).as_posix(), path
 
 
+def _catalog_release_ids(repository_root: Path, current_package_id: str) -> list[str]:
+    """Collect release IDs without opening any manifests."""
+    result: list[str] = []
+    seen: set[str] = set()
+
+    catalog_path = repository_root / "catalog.json"
+    if catalog_path.is_file():
+        try:
+            existing = json.loads(catalog_path.read_text(encoding="utf-8"))
+            for item in existing.get("releases", []):
+                release_id = item.get("id") if isinstance(item, dict) else item
+                if isinstance(release_id, str):
+                    release_id = release_id.strip()
+                    if release_id and release_id not in seen:
+                        seen.add(release_id)
+                        result.append(release_id)
+        except Exception:
+            # Rebuild from the local releases directory if an old catalog is
+            # damaged rather than blocking package publication.
+            pass
+
+    releases_root = repository_root / "releases"
+    if releases_root.is_dir():
+        for release_dir in sorted(releases_root.iterdir(), key=lambda p: p.name.lower()):
+            if not release_dir.is_dir() or not (release_dir / "manifest.json").is_file():
+                continue
+            release_id = release_dir.name
+            if release_id not in seen:
+                seen.add(release_id)
+                result.append(release_id)
+
+    if current_package_id not in seen:
+        result.append(current_package_id)
+    return result
+
+
+def _write_catalog(repository_root: Path, package_id: str, cancel_event=None) -> Path:
+    _raise_if_cancelled(cancel_event)
+    catalog_path = repository_root / "catalog.json"
+    temp_catalog = repository_root / "catalog.json.tmp"
+    data = build_catalog(_catalog_release_ids(repository_root, package_id))
+    try:
+        temp_catalog.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        _raise_if_cancelled(cancel_event)
+        os.replace(temp_catalog, catalog_path)
+    finally:
+        temp_catalog.unlink(missing_ok=True)
+    return catalog_path
+
+
 @dataclass(frozen=True)
 class PublishResult:
     manifest_path: Path
     object_root: Path
+    catalog_path: Path
     file_count: int
     object_count: int
     new_object_count: int
@@ -112,8 +168,6 @@ def _publish_one_file(
                 object_path = object_root / object_id[:2] / object_id
                 object_path.parent.mkdir(parents=True, exist_ok=True)
 
-                # Final object files are immutable and appear only after an
-                # atomic rename. Exact-byte reuse is incidental, not assumed.
                 if object_path.exists():
                     if object_path.stat().st_size != chunk_bytes:
                         raise RuntimeError(f"existing object has wrong size: {object_path}")
@@ -158,11 +212,12 @@ def publish_web_package(
 
     Layout:
       repository_root/
+        catalog.json
         releases/<package_id>/manifest.json
         objects/<first-two-hash-chars>/<sha256>
 
-    Cancellation never publishes a manifest. Completed immutable objects are
-    retained and can be reused by a later publishing attempt.
+    catalog.json is intentionally tiny and contains release IDs only. Clients
+    can populate a version chooser without downloading every manifest.
     """
 
     _raise_if_cancelled(cancel_event)
@@ -255,9 +310,15 @@ def publish_web_package(
     finally:
         temp_manifest.unlink(missing_ok=True)
 
+    # Publish/update the tiny version index only after the release manifest is
+    # complete. When deploying to HFS, catalog.json should likewise be uploaded
+    # after the release manifest so clients never discover a half-published ID.
+    catalog_path = _write_catalog(repository_root, package_id, cancel_event)
+
     return PublishResult(
         manifest_path=manifest_path,
         object_root=object_root,
+        catalog_path=catalog_path,
         file_count=len(published),
         object_count=len(object_ids),
         new_object_count=sum(item.new_objects for item in published),
