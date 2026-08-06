@@ -3,14 +3,45 @@ from __future__ import annotations
 import os
 import shutil
 import tkinter as tk
+from functools import lru_cache
 from pathlib import Path
 from tkinter import messagebox, ttk
+
+try:
+    import winreg
+except ImportError:  # pragma: no cover - Sierra Patcher is Windows-targeted
+    winreg = None
 
 from .gui import _hide_console_on_windows, _safe_call
 from .gui_catalog import CatalogSierraPatcherGUI
 from .paths import WORKING_DIR
 from .web_catalog import CATALOG_PLACEHOLDER
 from .web_download import _io_path
+
+
+@lru_cache(maxsize=1)
+def _native_cpu_info() -> dict[str, str]:
+    """Return CPU branding without spawning WMIC/PowerShell/helper consoles.
+
+    py-cpuinfo may invoke console utilities internally on Windows. The base GUI
+    refreshed that probe whenever status changed, which could briefly flash
+    console windows even though Sierra's own child processes are hidden.
+    """
+
+    if os.name == "nt" and winreg is not None:
+        try:
+            key_path = r"HARDWARE\DESCRIPTION\System\CentralProcessor\0"
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path) as key:
+                value, _ = winreg.QueryValueEx(key, "ProcessorNameString")
+            brand = str(value).strip()
+            if brand:
+                return {"brand_raw": brand}
+        except Exception:
+            pass
+
+    # Environment fallback is intentionally subprocess-free as well.
+    brand = (os.environ.get("PROCESSOR_IDENTIFIER") or "CPU").strip() or "CPU"
+    return {"brand_raw": brand}
 
 
 class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
@@ -21,6 +52,22 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
     _READY_BG = "#e6f4ea"
     _READY_FG = "#216e39"
     _MANAGED_CACHE_DIRS = ("objects", "packages", "manifests")
+
+    def _refresh_status(self):
+        """Refresh status without allowing py-cpuinfo to spawn helper consoles."""
+
+        # Keep the existing status implementation centralized in gui.py for
+        # now, but replace only its CPU probe for the duration of this refresh.
+        # Tk status refreshes run on the GUI thread, so this temporary swap does
+        # not race Sierra's worker threads.
+        from . import gui as base_gui
+
+        original_probe = base_gui.cpuinfo.get_cpu_info
+        base_gui.cpuinfo.get_cpu_info = _native_cpu_info
+        try:
+            return super()._refresh_status()
+        finally:
+            base_gui.cpuinfo.get_cpu_info = original_probe
 
     def _build_install_tab(self, nb) -> ttk.Frame:
         root = super()._build_install_tab(nb)
