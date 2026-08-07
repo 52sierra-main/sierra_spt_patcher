@@ -88,6 +88,30 @@ class HybridSierraPatcherGUI(ResilientSierraPatcherGUI):
         self.g_delivery_var.set("Web delivery")
         self._toggle_generate_web_options()
 
+        # Web delivery is now the only generation output. Keep the internal
+        # value for the established generation worker, but remove the redundant
+        # selector from the Delivery section and compact the remaining rows.
+        delivery_frame = next(
+            (
+                widget
+                for widget in root.winfo_children()
+                if isinstance(widget, ttk.LabelFrame)
+                and widget.cget("text") == "Delivery"
+            ),
+            None,
+        )
+        if delivery_frame is not None:
+            for child in delivery_frame.grid_slaves(row=0):
+                child.grid_remove()
+            remaining = list(delivery_frame.grid_slaves())
+            for child in remaining:
+                info = child.grid_info()
+                if not info:
+                    continue
+                row = int(info.get("row", 0))
+                if row >= 1:
+                    child.grid_configure(row=row - 1)
+
         for widget in root.winfo_children():
             for child in widget.winfo_children():
                 if isinstance(child, ttk.Button) and child.cget("text") == "Generate patch package":
