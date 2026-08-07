@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -18,6 +19,8 @@ DEFAULT_CHUNK_SIZE = 256 * 1024 * 1024
 DEFAULT_PUBLISH_WORKERS = min(8, max(2, os.cpu_count() or 4))
 _IO_BLOCK_SIZE = 4 * 1024 * 1024
 PACKAGE_DIRS = ("patchfiles", "storage")
+_OBJECT_PROMOTION_ATTEMPTS = 9
+_OBJECT_PROMOTION_LOCK = threading.Lock()
 
 
 def _raise_if_cancelled(cancel_event) -> None:
@@ -98,6 +101,87 @@ def _write_catalog(repository_root: Path, package_id: str, cancel_event=None) ->
     return catalog_path
 
 
+def _sha256_path(path: Path, cancel_event=None) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while True:
+            _raise_if_cancelled(cancel_event)
+            block = stream.read(_IO_BLOCK_SIZE)
+            if not block:
+                break
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _wait_for_promotion_retry(attempt: int, cancel_event=None) -> None:
+    # Freshly-created files can be held briefly by Defender/indexers on Windows.
+    # Keep the total retry window bounded while giving those scanners time to
+    # release their handle. The cancel event remains responsive during waits.
+    delay = min(0.05 * (2 ** attempt), 0.8)
+    if cancel_event is not None:
+        if cancel_event.wait(delay):
+            _raise_if_cancelled(cancel_event)
+    else:
+        time.sleep(delay)
+
+
+def _promote_object(
+    temp_path: Path,
+    object_path: Path,
+    object_id: str,
+    chunk_bytes: int,
+    cancel_event=None,
+) -> bool:
+    """Atomically publish one content-addressed object.
+
+    Returns True when this call created the object and False when an identical
+    object was already present. Promotion itself is serialized because multiple
+    publisher workers can discover the same SHA at the same time. Windows AV or
+    indexing software can also temporarily hold a freshly closed temp/object
+    file, so access-denied rename failures are retried instead of aborting an
+    otherwise successful generation.
+    """
+
+    with _OBJECT_PROMOTION_LOCK:
+        _raise_if_cancelled(cancel_event)
+
+        if object_path.exists():
+            if object_path.stat().st_size != chunk_bytes:
+                raise RuntimeError(f"existing object has wrong size: {object_path}")
+            return False
+
+        last_error: OSError | None = None
+        for attempt in range(_OBJECT_PROMOTION_ATTEMPTS):
+            _raise_if_cancelled(cancel_event)
+            try:
+                os.replace(temp_path, object_path)
+                return True
+            except OSError as exc:
+                last_error = exc
+
+                # Another process may have won the same content-addressed race
+                # between our existence check and rename. In this exceptional
+                # path, verify the actual SHA before treating it as reusable.
+                if object_path.exists():
+                    try:
+                        if object_path.stat().st_size == chunk_bytes:
+                            existing_hash = _sha256_path(object_path, cancel_event)
+                            if existing_hash == object_id:
+                                return False
+                    except OSError:
+                        # The same transient scanner lock may also block the
+                        # verification read; retry below instead of failing yet.
+                        pass
+
+                if attempt + 1 < _OBJECT_PROMOTION_ATTEMPTS:
+                    _wait_for_promotion_retry(attempt, cancel_event)
+
+        raise RuntimeError(
+            "could not promote web object after transient-lock retries: "
+            f"{object_id} -> {object_path}"
+        ) from last_error
+
+
 @dataclass(frozen=True)
 class PublishResult:
     manifest_path: Path
@@ -168,14 +252,17 @@ def _publish_one_file(
                 object_path = object_root / object_id[:2] / object_id
                 object_path.parent.mkdir(parents=True, exist_ok=True)
 
-                if object_path.exists():
-                    if object_path.stat().st_size != chunk_bytes:
-                        raise RuntimeError(f"existing object has wrong size: {object_path}")
-                    reused_objects += 1
-                else:
-                    _raise_if_cancelled(cancel_event)
-                    os.replace(temp_path, object_path)
+                created = _promote_object(
+                    temp_path,
+                    object_path,
+                    object_id,
+                    chunk_bytes,
+                    cancel_event,
+                )
+                if created:
                     new_objects += 1
+                else:
+                    reused_objects += 1
 
                 object_ids.append(object_id)
                 objects.append({"id": object_id, "size": chunk_bytes})
