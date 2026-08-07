@@ -101,6 +101,55 @@ def _copy_current_patcher(snapshot_root: Path) -> None:
     shutil.copy2(source, destination)
 
 
+def _prepare_archived_object_cache(
+    objects_by_id: dict[str, int],
+    object_root: Path,
+    *,
+    workers: int,
+    on_progress=None,
+    cancel_event=None,
+) -> None:
+    """Verify resumable local objects before trusting them as download cache."""
+
+    existing = []
+    for object_id, size in objects_by_id.items():
+        path = object_root / object_id[:2] / object_id
+        if web_download._exists(path):
+            existing.append((object_id, size, path))
+    if not existing:
+        return
+
+    max_workers = max(1, min(int(workers), 32))
+    completed = 0
+
+    def verify(item):
+        object_id, size, path = item
+        _raise_if_cancelled(cancel_event)
+        if not web_download._verify_file(path, size, object_id, cancel_event):
+            web_download._unlink(path)
+            return object_id, False
+        return object_id, True
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(verify, item): item[0] for item in existing}
+        for future in as_completed(futures):
+            _raise_if_cancelled(cancel_event)
+            try:
+                object_id, valid = future.result()
+            except Exception:
+                for pending in futures:
+                    pending.cancel()
+                raise
+            completed += 1
+            if on_progress:
+                on_progress(
+                    "archive:resume",
+                    completed,
+                    len(existing),
+                    f"{'verified' if valid else 'discarded'} {object_id[:12]}",
+                )
+
+
 def archive_web_release(
     package_id: str,
     snapshot_root: str | Path,
@@ -119,10 +168,15 @@ def archive_web_release(
 
     existing_marker = root / ARCHIVED_SNAPSHOT_MARKER
     if any(root.iterdir()) and not existing_marker.is_file():
-        raise ArchivedSnapshotError(
-            "Archived snapshot destination is not empty. Choose an empty folder "
-            "or an existing Sierra Archived snapshot folder."
-        )
+        allowed = {"objects", "releases", "catalog.json"}
+        if getattr(sys, "frozen", False):
+            allowed.add(Path(sys.executable).name)
+        unexpected = [item.name for item in root.iterdir() if item.name not in allowed]
+        if unexpected:
+            raise ArchivedSnapshotError(
+                "Archived snapshot destination contains unrelated files: "
+                + ", ".join(sorted(unexpected)[:5])
+            )
     if existing_marker.is_file():
         existing = read_archived_snapshot(root)
         if existing.package_id != package_id:
@@ -137,6 +191,13 @@ def archive_web_release(
         on_progress("web:manifest", 1, 1, "Manifest ready")
 
     _, objects_by_id = web_download._parse_manifest(manifest)
+    _prepare_archived_object_cache(
+        objects_by_id,
+        root / "objects",
+        workers=download_workers,
+        on_progress=on_progress,
+        cancel_event=cancel_event,
+    )
     web_download._download_objects(
         objects_by_id,
         root / "objects",
