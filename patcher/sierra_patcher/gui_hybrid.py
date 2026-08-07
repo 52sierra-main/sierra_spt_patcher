@@ -13,19 +13,24 @@ from .archived_snapshot import (
     archive_web_release,
     read_archived_snapshot,
 )
+from .delete_list import finalize as _finalize_now
 from .gui import _hide_console_on_windows, _safe_call
 from .gui_resilient import ResilientSierraPatcherGUI
 from .hybrid_payload import generate_patches as generate_hybrid_patches
 from .package_format import enable_hybrid_package_format
 from .package_source import ArchivedSnapshotSource, LocalPackageSource as _RealLocalPackageSource
 from .paths import WORKING_DIR
+from .storage import apply_storage as _apply_payloads_now
 from .web_catalog import CATALOG_PLACEHOLDER
 
 
+# One canonical package format: deltas + ordinary-Zstd payloads + metadata.
 enable_hybrid_package_format()
 gui_web.generate_patches = generate_hybrid_patches
 cli.generate_patches = generate_hybrid_patches
 
+# New public workflow: publish one web release, then optionally save that exact
+# release as an object-only Archived snapshot for portable/offline use.
 gui_web.DELIVERY_MODES = ("Web delivery",)
 gui_web.PACKAGE_SOURCES = ("Web release", "Archived snapshot")
 
@@ -34,14 +39,48 @@ class HybridSierraPatcherGUI(ResilientSierraPatcherGUI):
     """Hybrid Zstd package GUI with portable object-only Archived snapshots."""
 
     def __init__(self, dev: bool = False):
+        # gui_web's established worker treats every non-web source as its local
+        # source class. Route that existing hook to the selected offline source
+        # without duplicating the long install workflow.
         gui_web.LocalPackageSource = lambda: self._selected_offline_source()
+        gui_web.finalize = self._defer_delete_finalize
+        gui_web.apply_storage = self._apply_payloads_then_finalize
+        self._pending_delete_finalize: tuple[str, str] | None = None
         self._offline_source_config: tuple[str, str, int] | None = None
         self._archived_cleanup_pending = False
         self._archived_cleanup_package_id: str | None = None
         self._archived_cleanup_cache: Path | None = None
         super().__init__(dev=dev)
 
+    def _defer_delete_finalize(self, dest_dir: str, delete_list_path: str) -> None:
+        self._pending_delete_finalize = (dest_dir, delete_list_path)
+        self._log("[install] delete-list finalization deferred until full payloads succeed")
+
+    def _apply_payloads_then_finalize(
+        self,
+        storage_dir,
+        dest_dir,
+        cancel_event=None,
+        on_progress=None,
+    ) -> None:
+        _apply_payloads_now(
+            storage_dir,
+            dest_dir,
+            cancel_event=cancel_event,
+            on_progress=on_progress,
+        )
+        pending = self._pending_delete_finalize
+        if pending is not None:
+            pending_dest, delete_list_path = pending
+            _finalize_now(pending_dest, delete_list_path)
+            self._pending_delete_finalize = None
+            self._log("[install] delete-list finalization completed after payloads")
+
     def _has_local_package(self) -> bool:
+        # Prevent an Archived snapshot launched from its own folder from trying
+        # to contact the catalog during initial GUI construction. Catalog's
+        # temporary "Local package" selection is replaced with Archived snapshot
+        # as soon as the hybrid controls have been created.
         return (Path(WORKING_DIR) / ARCHIVED_SNAPSHOT_MARKER).is_file()
 
     def _build_generate_tab(self, nb) -> ttk.Frame:
@@ -251,6 +290,7 @@ class HybridSierraPatcherGUI(ResilientSierraPatcherGUI):
 
         cache_text = self.i_web_cache.get().strip()
         cache_root = Path(cache_text or (Path(WORKING_DIR) / "web_cache"))
+        self._cleanup_web_cache_after_success = False
         self._cancel = threading.Event()
         self.btn_abort_ins.state(["!disabled"])
         self.btn_archive_snapshot.configure(state="disabled")
@@ -300,6 +340,7 @@ class HybridSierraPatcherGUI(ResilientSierraPatcherGUI):
         threading.Thread(target=worker, daemon=True).start()
 
     def _run_install(self):
+        self._pending_delete_finalize = None
         if self.i_source_var.get() == "Archived snapshot":
             if not self._snapshot_ready():
                 messagebox.showerror(
