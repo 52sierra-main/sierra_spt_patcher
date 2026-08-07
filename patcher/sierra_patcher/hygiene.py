@@ -8,6 +8,7 @@ from pathlib import Path
 
 TEMP_SUFFIXES = (".tmp_out", ".tmp_src", ".new")
 IGNORED_DIRS = {"__pycache__"}
+_VUPLEX_LOG_FILES = {"log-chromium.txt", "log-chromium.txt~"}
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,26 @@ def relative_package_path(path: str | Path, root: str | Path) -> Path:
     return Path(path).resolve().relative_to(Path(root).resolve())
 
 
+def is_volatile_runtime_file(path: str | Path, root: str | Path) -> bool:
+    """Return True for known runtime-generated files that are not game assets.
+
+    Vuplex 3D WebView writes Chromium's debug log beside its Windows player
+    plugin at runtime. Its presence and contents depend on whether/how the game
+    has been launched, so it must never be used as a delta-patch reference.
+    """
+
+    try:
+        rel = relative_package_path(path, root)
+    except ValueError:
+        return False
+
+    parts = tuple(part.lower() for part in rel.parts)
+    return (
+        rel.name.lower() in _VUPLEX_LOG_FILES
+        and "vuplexwebviewchromium" in parts
+    )
+
+
 def is_package_excluded(path: str | Path, root: str | Path) -> bool:
     """Return True for generated/debug files that should never ship."""
 
@@ -45,6 +66,9 @@ def is_package_excluded(path: str | Path, root: str | Path) -> bool:
         return True
 
     if any(part in IGNORED_DIRS for part in parts):
+        return True
+
+    if is_volatile_runtime_file(path, root):
         return True
 
     name = rel.name.lower()
