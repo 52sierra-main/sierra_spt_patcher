@@ -17,18 +17,35 @@ from .web_download import (
 class PackageLayout:
     root: Path
     patch_root: Path
+    payload_root: Path
     storage_root: Path
     source_type: str
+
+
+def _layout(root: Path, patch_root: Path, storage_root: Path, source_type: str) -> PackageLayout:
+    legacy = storage_root / "storage.sierra"
+    if legacy.is_file():
+        raise RuntimeError(
+            "This release uses the retired storage.sierra/7-Zip format. "
+            "Regenerate and republish it with the current Sierra Patcher before installing."
+        )
+    return PackageLayout(
+        root=root,
+        patch_root=patch_root,
+        payload_root=root / "payloads",
+        storage_root=storage_root,
+        source_type=source_type,
+    )
 
 
 class LocalPackageSource:
     def prepare(self, on_progress=None, cancel_event=None) -> PackageLayout:
         root = Path(WORKING_DIR)
-        return PackageLayout(
-            root=root,
-            patch_root=Path(PATCH_read_DIR),
-            storage_root=Path(STORAGE_read_DIR),
-            source_type="local",
+        return _layout(
+            root,
+            Path(PATCH_read_DIR),
+            Path(STORAGE_read_DIR),
+            "local",
         )
 
 
@@ -59,9 +76,43 @@ class WebPackageSource:
             on_progress=on_progress,
             cancel_event=cancel_event,
         )
-        return PackageLayout(
-            root=materialized.root,
-            patch_root=materialized.patch_root,
-            storage_root=materialized.storage_root,
-            source_type="web",
+        return _layout(
+            materialized.root,
+            materialized.patch_root,
+            materialized.storage_root,
+            "web",
+        )
+
+
+class ArchivedSnapshotSource:
+    def __init__(
+        self,
+        snapshot_root: str | Path,
+        cache_root: str | Path,
+        *,
+        materialize_workers: int = DEFAULT_MATERIALIZE_WORKERS,
+    ):
+        self.snapshot_root = Path(snapshot_root)
+        self.cache_root = Path(cache_root)
+        self.materialize_workers = materialize_workers
+
+    def prepare(
+        self,
+        on_progress: Callable[[str, int, int, str], None] | None = None,
+        cancel_event=None,
+    ) -> PackageLayout:
+        from .archived_snapshot import materialize_archived_snapshot
+
+        materialized: MaterializedPackage = materialize_archived_snapshot(
+            self.snapshot_root,
+            self.cache_root,
+            materialize_workers=self.materialize_workers,
+            on_progress=on_progress,
+            cancel_event=cancel_event,
+        )
+        return _layout(
+            materialized.root,
+            materialized.patch_root,
+            materialized.storage_root,
+            "archived_snapshot",
         )
