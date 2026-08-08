@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 from pathlib import Path
 
 from .paths import ZSTD_EXE
@@ -28,6 +29,7 @@ def enable_deferred_payload_verification() -> None:
     from . import hybrid_payload as hp
 
     original_replace = hp._replace_file
+    thread_state = threading.local()
 
     def compress_candidate(
         source_file: str | Path,
@@ -37,6 +39,7 @@ def enable_deferred_payload_verification() -> None:
         cancel_event=None,
     ) -> None:
         hp._raise_if_cancelled(cancel_event)
+        thread_state.cancel_event = cancel_event
         output = Path(output_file)
         os.makedirs(hp._python_io_path(output.parent), exist_ok=True)
         hp._remove(output)
@@ -63,6 +66,8 @@ def enable_deferred_payload_verification() -> None:
 
     def verify_candidate(path: str | Path) -> None:
         candidate = Path(path)
+        cancel_event = getattr(thread_state, "cancel_event", None)
+        hp._raise_if_cancelled(cancel_event)
         try:
             run_quiet(
                 [
@@ -74,6 +79,7 @@ def enable_deferred_payload_verification() -> None:
                 ],
                 check=True,
                 capture=True,
+                cancel_event=cancel_event,
             )
         except subprocess.CalledProcessError as exc:
             hp._remove(candidate)
