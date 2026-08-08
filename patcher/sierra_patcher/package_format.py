@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path, PurePosixPath
 
 from . import web_delivery, web_download
+from .hybrid_optimization import enable_deferred_payload_verification
 
 HYBRID_PACKAGE_DIRS = ("patchfiles", "payloads", "storage")
 
@@ -21,7 +22,8 @@ def _safe_hybrid_logical_path(value: str) -> Path:
 
 
 def enable_hybrid_package_format() -> None:
-    """Enable payloads/ as a first-class canonical/web package directory."""
+    """Enable the hybrid package layout and its generation optimizations."""
 
     web_delivery.PACKAGE_DIRS = HYBRID_PACKAGE_DIRS
     web_download._safe_logical_path = _safe_hybrid_logical_path
+    enable_deferred_payload_verification()
