@@ -4,11 +4,11 @@ import sys
 
 # robust imports (work with/without package context)
 try:
-    from . import cli, gui_hybrid as gui
+    from . import cli, gui_repository as gui
     from .flags import is_dev_mode
 except ImportError:  # frozen exe starting main.py as a script
     import sierra_patcher.cli as cli
-    import sierra_patcher.gui_hybrid as gui
+    import sierra_patcher.gui_repository as gui
     from sierra_patcher.flags import is_dev_mode
 
 
