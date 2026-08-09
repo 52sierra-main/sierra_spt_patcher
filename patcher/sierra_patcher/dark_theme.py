@@ -204,6 +204,17 @@ def _configure_ttk_styles(root: tk.Misc) -> None:
     style.map("Treeview.Heading", background=[("active", HOVER_BG)])
 
 
+def _refresh_windows_frame(hwnd: int) -> None:
+    """Force Windows to repaint the non-client frame after a DWM change."""
+    try:
+        user32 = ctypes.windll.user32
+        # SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED
+        user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0037)
+        # RDW_INVALIDATE | RDW_UPDATENOW | RDW_FRAME
+        user32.RedrawWindow(hwnd, None, None, 0x0501)
+    except Exception:
+        pass
+
 
 def _set_windows_dark_titlebar(window: tk.Misc) -> None:
     if sys.platform != "win32":
@@ -215,7 +226,9 @@ def _set_windows_dark_titlebar(window: tk.Misc) -> None:
         handles = [handle for handle in (parent_hwnd, child_hwnd) if handle]
         enabled = ctypes.c_int(1)
         dwm = ctypes.windll.dwmapi
+
         for hwnd in handles:
+            applied = False
             for attribute in (20, 19):  # Win10/11 current value, then older Win10 fallback.
                 try:
                     result = dwm.DwmSetWindowAttribute(
@@ -225,11 +238,28 @@ def _set_windows_dark_titlebar(window: tk.Misc) -> None:
                         ctypes.sizeof(enabled),
                     )
                     if result == 0:
-                        return
+                        applied = True
+                        break
                 except Exception:
                     continue
+            if applied:
+                _refresh_windows_frame(hwnd)
     except Exception:
         pass
+
+
+def _schedule_windows_dark_titlebar(window: tk.Misc) -> None:
+    """Apply after mapping as well as shortly after startup.
+
+    Tk can create/show the native frame after the first idle callback. Applying
+    the attribute a few times during that short startup window avoids a white
+    title bar that only refreshes after minimize/restore.
+    """
+    for delay_ms in (0, 40, 160, 500):
+        try:
+            window.after(delay_ms, lambda w=window: _set_windows_dark_titlebar(w))
+        except tk.TclError:
+            return
 
 
 def _normalized_color(value: object) -> str:
@@ -242,10 +272,7 @@ def _theme_classic_widget(widget: tk.Misc) -> None:
             widget.configure(background=WINDOW_BG)
         except tk.TclError:
             pass
-        try:
-            widget.after_idle(lambda w=widget: _set_windows_dark_titlebar(w))
-        except tk.TclError:
-            pass
+        _schedule_windows_dark_titlebar(widget)
         return
 
     if isinstance(widget, (ScrolledText, tk.Text)):
@@ -373,4 +400,4 @@ def install_dark_theme(app: tk.Tk) -> None:
             pass
 
     app.bind_all("<Map>", on_map, add="+")
-    app.after_idle(lambda: _set_windows_dark_titlebar(app))
+    _schedule_windows_dark_titlebar(app)
