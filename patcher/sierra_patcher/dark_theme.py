@@ -249,17 +249,51 @@ def _set_windows_dark_titlebar(window: tk.Misc) -> None:
 
 
 def _schedule_windows_dark_titlebar(window: tk.Misc) -> None:
-    """Apply after mapping as well as shortly after startup.
-
-    Tk can create/show the native frame after the first idle callback. Applying
-    the attribute a few times during that short startup window avoids a white
-    title bar that only refreshes after minimize/restore.
-    """
-    for delay_ms in (0, 40, 160, 500):
+    """Keep later Toplevel windows dark as they are created and mapped."""
+    for delay_ms in (0, 40, 160):
         try:
             window.after(delay_ms, lambda w=window: _set_windows_dark_titlebar(w))
         except tk.TclError:
             return
+
+
+def present_main_window(app: tk.Tk) -> None:
+    """Present the main Tk window only after its native frame is dark.
+
+    Tk/Windows can paint the non-client frame once in the system light theme
+    before DWM dark-mode attributes visibly take effect. A later minimize/restore
+    then fixes it because Windows recreates/repaints that frame. Keeping the root
+    withdrawn during initial DWM setup gives Windows the correct state before the
+    first visible presentation instead of relying on a later repaint.
+    """
+    if sys.platform != "win32":
+        app.deiconify()
+        return
+
+    try:
+        app.withdraw()
+        # Realize Tk's HWND hierarchy while it is still invisible.
+        app.update_idletasks()
+        _set_windows_dark_titlebar(app)
+
+        def reveal() -> None:
+            try:
+                # Re-apply immediately before the visibility transition.
+                _set_windows_dark_titlebar(app)
+                app.deiconify()
+                app.update_idletasks()
+                # One final application targets any wrapper/frame state Tk/Windows
+                # updates as part of deiconify().
+                _set_windows_dark_titlebar(app)
+            except tk.TclError:
+                pass
+
+        app.after(0, reveal)
+    except tk.TclError:
+        try:
+            app.deiconify()
+        except tk.TclError:
+            pass
 
 
 def _normalized_color(value: object) -> str:
