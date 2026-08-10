@@ -42,6 +42,10 @@ class IntegratedSierraPatcherGUI(SierraPatcherGUI):
     """Existing Sierra GUI with modular local/web package delivery."""
 
     def __init__(self, dev: bool = False):
+        # This guard is independent from the button state. It prevents queued
+        # double-clicks or future programmatic calls from starting overlapping
+        # workers that would mutate the same destination/cache concurrently.
+        self._install_running = False
         super().__init__(dev=dev)
         self.geometry("980x650")
         for child in self.winfo_children():
@@ -57,6 +61,30 @@ class IntegratedSierraPatcherGUI(SierraPatcherGUI):
         if result < 1 or result > maximum:
             raise ValueError(f"{label} must be between 1 and {maximum}")
         return result
+
+    def _begin_install_run(self) -> bool:
+        """Atomically claim the install action and show immediate feedback."""
+        if self._install_running:
+            self._log("[install] duplicate start ignored: installation already running")
+            return False
+
+        self._install_running = True
+        self.btn_install.state(["disabled"])
+        self.btn_abort_ins.state(["!disabled"])
+
+        # _run_install executes on Tk's main thread, so update these directly.
+        # This removes the visible Idle gap before slower package preparation.
+        self._phase_var.set("Preparing installation")
+        self._detail_var.set("Validating package...")
+        self._prog_bar.configure(mode="determinate", maximum=1, value=0)
+        self.update_idletasks()
+        return True
+
+    def _finish_install_run(self) -> None:
+        """Release the install guard and restore controls from current inputs."""
+        self._install_running = False
+        self.btn_abort_ins.state(["disabled"])
+        self._validate_install_ready()
 
     def _threadsafe_dialog(self, callback, *args):
         done = threading.Event()
@@ -84,6 +112,7 @@ class IntegratedSierraPatcherGUI(SierraPatcherGUI):
             "web:objects": "Downloading objects",
             "web:materialize": "Reconstructing package",
             "web:publish": "Publishing web package",
+            "archive:objects": "Verifying archived objects",
         }
         lock = threading.Lock()
         state = {"phase": None, "time": 0.0}
@@ -405,7 +434,10 @@ class IntegratedSierraPatcherGUI(SierraPatcherGUI):
                 text="Destination folder is required." if not destination else "Folder does not exist."
             )
             self._dest_hint.grid()
-        if valid_destination and valid_source:
+
+        if getattr(self, "_install_running", False):
+            self.btn_install.state(["disabled"])
+        elif valid_destination and valid_source:
             self.btn_install.state(["!disabled"])
         else:
             self.btn_install.state(["disabled"])
@@ -583,6 +615,10 @@ class IntegratedSierraPatcherGUI(SierraPatcherGUI):
         threading.Thread(target=worker, daemon=True).start()
 
     def _run_install(self):
+        if getattr(self, "_install_running", False):
+            self._log("[install] duplicate start ignored: installation already running")
+            return
+
         destination = self.i_dest.get().strip()
         source_mode = self.i_source_var.get()
         release_id = self.i_web_release.get().strip()
@@ -607,8 +643,14 @@ class IntegratedSierraPatcherGUI(SierraPatcherGUI):
 
         cache_root = Path(self.i_web_cache.get().strip() or (Path(WORKING_DIR) / "web_cache"))
         self._cancel = threading.Event()
-        self.btn_abort_ins.state(["!disabled"])
-        check_resources()
+        if not self._begin_install_run():
+            return
+
+        try:
+            check_resources()
+        except Exception:
+            self._finish_install_run()
+            raise
 
         def worker():
             try:
@@ -625,7 +667,10 @@ class IntegratedSierraPatcherGUI(SierraPatcherGUI):
                         cancel_event=self._cancel,
                     )
                 else:
-                    layout = LocalPackageSource().prepare(cancel_event=self._cancel)
+                    layout = LocalPackageSource().prepare(
+                        on_progress=self._web_progress_callback(),
+                        cancel_event=self._cancel,
+                    )
 
                 if self._cancel.is_set():
                     return
@@ -721,9 +766,13 @@ class IntegratedSierraPatcherGUI(SierraPatcherGUI):
                     _safe_call(self, messagebox.showerror, "Install", "Install failed. See Logs for details.")
             finally:
                 proc.kill_all()
-                _safe_call(self, self.btn_abort_ins.state, ["disabled"])
+                _safe_call(self, self._finish_install_run)
 
-        threading.Thread(target=worker, daemon=True).start()
+        try:
+            threading.Thread(target=worker, daemon=True).start()
+        except Exception:
+            self._finish_install_run()
+            raise
 
 
 def main(dev: bool = False):
