@@ -236,7 +236,19 @@ def _verify_archived_objects(
     cancel_event=None,
 ) -> None:
     if not objects_by_id:
+        if on_progress:
+            on_progress("archive:objects", 1, 1, "No archived objects to verify")
         return
+
+    total_objects = len(objects_by_id)
+    if on_progress:
+        on_progress(
+            "archive:objects",
+            0,
+            total_objects,
+            f"verifying 0/{total_objects} objects",
+        )
+
     max_workers = max(1, min(int(workers), 32))
     completed = 0
 
@@ -265,8 +277,8 @@ def _verify_archived_objects(
                 on_progress(
                     "archive:objects",
                     completed,
-                    len(objects_by_id),
-                    f"verified {completed}/{len(objects_by_id)} objects ({object_id[:12]})",
+                    total_objects,
+                    f"verified {completed}/{total_objects} objects ({object_id[:12]})",
                 )
 
 
