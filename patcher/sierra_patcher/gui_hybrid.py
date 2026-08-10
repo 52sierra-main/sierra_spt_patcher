@@ -364,6 +364,10 @@ class HybridSierraPatcherGUI(ResilientSierraPatcherGUI):
         threading.Thread(target=worker, daemon=True).start()
 
     def _run_install(self):
+        if getattr(self, "_install_running", False):
+            self._log("[install] duplicate archived start ignored: installation already running")
+            return
+
         self._pending_delete_finalize = None
         if self.i_source_var.get() == "Archived snapshot":
             if not self._snapshot_ready():
