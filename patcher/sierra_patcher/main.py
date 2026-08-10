@@ -7,12 +7,14 @@ try:
     from . import cli, gui_repository as gui
     from .dark_theme import install_dark_theme, present_main_window
     from .flags import is_dev_mode
+    from .generation_guard import enable_generation_guard
     from .gui import _hide_console_on_windows
 except ImportError:  # frozen exe starting main.py as a script
     import sierra_patcher.cli as cli
     import sierra_patcher.gui_repository as gui
     from sierra_patcher.dark_theme import install_dark_theme, present_main_window
     from sierra_patcher.flags import is_dev_mode
+    from sierra_patcher.generation_guard import enable_generation_guard
     from sierra_patcher.gui import _hide_console_on_windows
 
 
@@ -23,6 +25,7 @@ def main(argv: list[str] | None = None) -> None:
         return cli.run_cli(argv, dev=dev)
 
     _hide_console_on_windows()
+    enable_generation_guard()
     app = gui.RepositorySierraPatcherGUI(dev=dev)
 
     # Keep the first visible native frame from being painted with Windows' light
