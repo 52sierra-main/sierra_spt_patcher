@@ -253,7 +253,7 @@ class HybridSierraPatcherGUI(ResilientSierraPatcherGUI):
 
             destination = self._destination_value()
             destination_ready = bool(destination and Path(destination).is_dir())
-            if ready and destination_ready:
+            if ready and destination_ready and not getattr(self, "_install_running", False):
                 self.btn_install.state(["!disabled"])
             else:
                 self.btn_install.state(["disabled"])
