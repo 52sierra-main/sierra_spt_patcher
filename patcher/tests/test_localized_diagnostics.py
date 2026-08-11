@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import unittest
 from types import SimpleNamespace
 
@@ -14,7 +13,9 @@ from sierra_patcher.source_integrity import (
 
 try:
     from sierra_patcher import prereqs
-except ImportError:  # pragma: no cover - prereqs imports winreg on Windows targets
+except ModuleNotFoundError as exc:  # pragma: no cover - prereqs is Windows-targeted
+    if exc.name != "winreg":
+        raise
     prereqs = None
 
 
