@@ -119,7 +119,7 @@ _KO = {
 
     # Dialogs and install progress
     "Destination required": "대상 폴더 필요",
-    "Select the pasted Live folder that Sierra Patcher should modify.":
+    "Select the pasted Live folder that needs to be patched.":
         "Sierra Patcher가 변경할, 복사해 둔 라이브 폴더를 선택해 주세요.",
     "Missing folder": "폴더 필요",
     "Select a valid destination folder.": "올바른 대상 폴더를 선택하세요.",
@@ -154,8 +154,8 @@ _KO = {
     "Install failed. See Logs for details.": "설치 실패. 자세한 내용은 로그를 확인해 주세요.",
     "Patch package ready in:\n{path}": "패치 패키지가 준비완료:\n{path}",
     "Version mismatch": "버전 불일치",
-    "Version mismatch detected.\n\nLive client: {live_version}\nExpected: {expected_version}\n\nSelect the correct Tarkov folder or enable Force only if intentional.":
-        "버전이 일치하지 않음.\n\n라이브 클라이언트: {live_version}\n필요한 버전: {expected_version}\n\n올바른 폴더를 선택하십시오. 본섭이 버전이 높다면 패치 업데이트를 기다리시고 본섭 버전이 낮다면 본섭을 업데이트 하세요.",
+    "Version mismatch detected.\n\nLive client: {live_version}\nExpected: {expected_version}\n\nIf your live version exceeds that of the patch, please wait for an update. Otherwise, please update your live game and try again":
+        "버전이 일치하지 않음.\n\n라이브 클라이언트: {live_version}\n필요한 버전: {expected_version}\n\n올바른 폴더를 선택하십시오. 본섭이 버전이 높다면 패치 업데이트를 기다리시고 본섭 버전이 낮다면 본섭 업데이트 후 다시 설치 과정을 시도하세요.",
     "Folder contents mismatch": "폴더 내용 불일치",
     "The destination differs from the source used to build this patch.\n\n{details}":
         "선택한 폴더가 이 패치를 만들 때 사용한 원본과 다릅니다. 무결성 검사 후 다시 시도하시기 바랍니다.\n\n{details}",
