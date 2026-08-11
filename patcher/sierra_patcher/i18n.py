@@ -154,7 +154,7 @@ _KO = {
     "Install failed. See Logs for details.": "설치 실패. 자세한 내용은 로그를 확인해 주세요.",
     "Patch package ready in:\n{path}": "패치 패키지가 준비완료:\n{path}",
     "Version mismatch": "버전 불일치",
-    "Version mismatch detected.\n\nLive client: {live_version}\nExpected: {expected_version}\n\nIf your live version exceeds that of the patch, please wait for an update. Otherwise, please update your live game and try again":
+    "Version mismatch detected.\n\nLive client: {live_version}\nExpected: {expected_version}\n\nIf your live version exceeds that of the patch, please wait for an update. Otherwise, please update your live game and try again.":
         "버전이 일치하지 않음.\n\n라이브 클라이언트: {live_version}\n필요한 버전: {expected_version}\n\n올바른 폴더를 선택하십시오. 본섭이 버전이 높다면 패치 업데이트를 기다리시고 본섭 버전이 낮다면 본섭 업데이트 후 다시 설치 과정을 시도하세요.",
     "Folder contents mismatch": "폴더 내용 불일치",
     "The destination differs from the source used to build this patch.\n\n{details}":
