@@ -16,6 +16,7 @@ from .archived_snapshot import (
 from .delete_list import finalize as _finalize_now
 from .gui import _hide_console_on_windows, _safe_call
 from .gui_resilient import ResilientSierraPatcherGUI
+from .i18n import canonical_choice, tr
 from .hybrid_payload import generate_patches as generate_hybrid_patches
 from .package_format import enable_hybrid_package_format
 from .package_source import ArchivedSnapshotSource, LocalPackageSource as _RealLocalPackageSource
@@ -85,21 +86,13 @@ class HybridSierraPatcherGUI(ResilientSierraPatcherGUI):
 
     def _build_generate_tab(self, nb) -> ttk.Frame:
         root = super()._build_generate_tab(nb)
-        self.g_delivery_var.set("Web delivery")
+        self.g_delivery_var.set(tr("Web delivery"))
         self._toggle_generate_web_options()
 
         # Web delivery is now the only generation output. Keep the internal
         # value for the established generation worker, but remove the redundant
         # selector from the Delivery section and compact the remaining rows.
-        delivery_frame = next(
-            (
-                widget
-                for widget in root.winfo_children()
-                if isinstance(widget, ttk.LabelFrame)
-                and widget.cget("text") == "Delivery"
-            ),
-            None,
-        )
+        delivery_frame = getattr(self, "g_delivery_frame", None)
         if delivery_frame is not None:
             for child in delivery_frame.grid_slaves(row=0):
                 child.grid_remove()
@@ -112,10 +105,7 @@ class HybridSierraPatcherGUI(ResilientSierraPatcherGUI):
                 if row >= 1:
                     child.grid_configure(row=row - 1)
 
-        for widget in root.winfo_children():
-            for child in widget.winfo_children():
-                if isinstance(child, ttk.Button) and child.cget("text") == "Generate patch package":
-                    child.configure(text="Generate web release")
+        self.btn_generate.configure(text=tr("Generate web release"))
         return root
 
     def _build_install_tab(self, nb) -> ttk.Frame:
@@ -124,7 +114,7 @@ class HybridSierraPatcherGUI(ResilientSierraPatcherGUI):
 
         self.btn_archive_snapshot = ttk.Button(
             source_frame,
-            text="Save selected release as Archived snapshot...",
+            text=tr("Save selected release as Archived snapshot..."),
             command=self._run_archive_snapshot,
         )
         self.btn_archive_snapshot.grid(
@@ -145,24 +135,24 @@ class HybridSierraPatcherGUI(ResilientSierraPatcherGUI):
         )
         ttk.Label(
             self._archive_path_frame,
-            text="Archived snapshot",
+            text=tr("Archived snapshot"),
             font=("Segoe UI", 9, "bold"),
         ).grid(row=0, column=0, sticky="w", padx=(0, 8), pady=(2, 2))
         self.i_archive_path.grid(row=0, column=1, sticky="ew", pady=(2, 2))
         ttk.Button(
             self._archive_path_frame,
-            text="Browse...",
+            text=tr("Browse..."),
             command=self._browse_archived_snapshot,
         ).grid(row=0, column=2, sticky="e", padx=(8, 0), pady=(2, 2))
         self._archive_hint = ttk.Label(
             self._archive_path_frame,
-            text="Select a Sierra Archived snapshot folder.",
+            text=tr("Select a Sierra Archived snapshot folder."),
             style="Hint.TLabel",
         )
         self._archive_hint.grid(row=1, column=1, columnspan=2, sticky="w", pady=(2, 0))
         self._archive_badge = tk.Label(
             self._archive_path_frame,
-            text="REQUIRED",
+            text=tr("REQUIRED"),
             bg=self._REQUIRED_BG,
             fg=self._REQUIRED_FG,
             font=("Segoe UI", 8, "bold"),
@@ -176,7 +166,7 @@ class HybridSierraPatcherGUI(ResilientSierraPatcherGUI):
         local_marker = Path(WORKING_DIR) / ARCHIVED_SNAPSHOT_MARKER
         if local_marker.is_file():
             self.i_archive_path_var.set(str(Path(WORKING_DIR)))
-            self.i_source_var.set("Archived snapshot")
+            self.i_source_var.set(tr("Archived snapshot"))
 
         self._toggle_install_web_options()
         self._validate_install_ready()
@@ -195,7 +185,7 @@ class HybridSierraPatcherGUI(ResilientSierraPatcherGUI):
         return _RealLocalPackageSource()
 
     def _browse_archived_snapshot(self) -> None:
-        selected = filedialog.askdirectory(title="Select Sierra Archived snapshot")
+        selected = filedialog.askdirectory(title=tr("Select Sierra Archived snapshot"))
         if selected:
             self.i_archive_path_var.set(selected)
 
@@ -216,7 +206,7 @@ class HybridSierraPatcherGUI(ResilientSierraPatcherGUI):
         if not hasattr(self, "btn_archive_snapshot"):
             return result
 
-        source = self.i_source_var.get()
+        source = canonical_choice(self.i_source_var.get(), gui_web.PACKAGE_SOURCES)
         if source == "Web release":
             self._archive_path_frame.grid_remove()
             self.btn_archive_snapshot.grid()
@@ -242,14 +232,16 @@ class HybridSierraPatcherGUI(ResilientSierraPatcherGUI):
         if not hasattr(self, "i_archive_path_var"):
             return result
 
-        source = self.i_source_var.get()
+        source = canonical_choice(self.i_source_var.get(), gui_web.PACKAGE_SOURCES)
         if source == "Archived snapshot":
             ready = self._snapshot_ready()
             self._set_badge(self._archive_badge, ready)
             if ready:
-                self._archive_hint.configure(text="Archived snapshot is ready.")
+                self._archive_hint.configure(text=tr("Archived snapshot is ready."))
             else:
-                self._archive_hint.configure(text="Select a valid Sierra Archived snapshot folder.")
+                self._archive_hint.configure(
+                    text=tr("Select a valid Sierra Archived snapshot folder.")
+                )
 
             destination = self._destination_value()
             destination_ready = bool(destination and Path(destination).is_dir())
@@ -258,13 +250,13 @@ class HybridSierraPatcherGUI(ResilientSierraPatcherGUI):
             else:
                 self.btn_install.state(["disabled"])
         else:
-            self._archive_hint.configure(text="Select a Sierra Archived snapshot folder.")
+            self._archive_hint.configure(text=tr("Select a Sierra Archived snapshot folder."))
 
         if source == "Web release":
             release = self.i_web_release_var.get().strip()
             valid_release = bool(
                 release
-                and release != CATALOG_PLACEHOLDER
+                and canonical_choice(release, (CATALOG_PLACEHOLDER,)) != CATALOG_PLACEHOLDER
                 and release in tuple(self.i_web_release.cget("values"))
             )
             self.btn_archive_snapshot.configure(state="normal" if valid_release else "disabled")
@@ -274,7 +266,10 @@ class HybridSierraPatcherGUI(ResilientSierraPatcherGUI):
         result = super()._refresh_status()
         if not hasattr(self, "i_archive_path_var"):
             return result
-        if self.i_source_var.get() != "Archived snapshot":
+        if canonical_choice(
+            self.i_source_var.get(),
+            gui_web.PACKAGE_SOURCES,
+        ) != "Archived snapshot":
             return result
         try:
             info = read_archived_snapshot(self.i_archive_path_var.get().strip())
@@ -284,20 +279,30 @@ class HybridSierraPatcherGUI(ResilientSierraPatcherGUI):
                 for entry in manifest.get("files", [])
                 if isinstance(entry, dict) and str(entry.get("path", "")).startswith("patchfiles/")
             )
-            self._stat["pat_title"].set(f"Archived: {info.package_id}")
+            self._stat["pat_title"].set(
+                tr("Archived: {package_id}", package_id=info.package_id)
+            )
             self._stat["pat_patches"].set(str(patch_count))
         except Exception:
-            self._stat["pat_title"].set("Archived snapshot")
-            self._stat["pat_patches"].set("Not prepared")
+            self._stat["pat_title"].set(tr("Archived snapshot"))
+            self._stat["pat_patches"].set(tr("Not prepared"))
         return result
 
     def _run_archive_snapshot(self) -> None:
         release = self.i_web_release_var.get().strip()
-        if not release or release == CATALOG_PLACEHOLDER:
-            messagebox.showerror("Version required", "Choose a web release to archive first.")
+        if (
+            not release
+            or canonical_choice(release, (CATALOG_PLACEHOLDER,)) == CATALOG_PLACEHOLDER
+        ):
+            messagebox.showerror(
+                tr("Version required"),
+                tr("Choose a web release to archive first."),
+            )
             return
 
-        selected = filedialog.askdirectory(title="Choose where to store the Archived snapshot")
+        selected = filedialog.askdirectory(
+            title=tr("Choose where to store the Archived snapshot")
+        )
         if not selected:
             return
         selected_path = Path(selected)
@@ -309,7 +314,7 @@ class HybridSierraPatcherGUI(ResilientSierraPatcherGUI):
         try:
             download_workers = self._positive_int(self.i_download_workers.get(), "Download workers")
         except ValueError as exc:
-            messagebox.showerror("Invalid setting", str(exc))
+            messagebox.showerror(tr("Invalid setting"), str(exc))
             return
 
         cache_text = self.i_web_cache.get().strip()
@@ -339,11 +344,15 @@ class HybridSierraPatcherGUI(ResilientSierraPatcherGUI):
                 _safe_call(
                     self,
                     messagebox.showinfo,
-                    "Archived snapshot",
-                    "Archived snapshot created successfully.\n\n"
-                    f"Release: {info.package_id}\n"
-                    f"Location:\n{info.root}\n\n"
-                    "The snapshot keeps the package in manifest/object form and reconstructs it only when installed.",
+                    tr("Archived snapshot"),
+                    tr(
+                        "Archived snapshot created successfully.\n\n"
+                        "Release: {package_id}\n"
+                        "Location:\n{root}\n\n"
+                        "The snapshot keeps the package in manifest/object form and reconstructs it only when installed.",
+                        package_id=info.package_id,
+                        root=info.root,
+                    ),
                 )
             except Exception:
                 if self._cancel.is_set():
@@ -354,8 +363,8 @@ class HybridSierraPatcherGUI(ResilientSierraPatcherGUI):
                     _safe_call(
                         self,
                         messagebox.showerror,
-                        "Archived snapshot",
-                        "Could not create the Archived snapshot. See Logs for details.",
+                        tr("Archived snapshot"),
+                        tr("Could not create the Archived snapshot. See Logs for details."),
                     )
             finally:
                 _safe_call(self, self.btn_abort_ins.state, ["disabled"])
@@ -369,11 +378,14 @@ class HybridSierraPatcherGUI(ResilientSierraPatcherGUI):
             return
 
         self._pending_delete_finalize = None
-        if self.i_source_var.get() == "Archived snapshot":
+        if canonical_choice(
+            self.i_source_var.get(),
+            gui_web.PACKAGE_SOURCES,
+        ) == "Archived snapshot":
             if not self._snapshot_ready():
                 messagebox.showerror(
-                    "Archived snapshot required",
-                    "Select a valid Sierra Archived snapshot folder first.",
+                    tr("Archived snapshot required"),
+                    tr("Select a valid Sierra Archived snapshot folder first."),
                 )
                 return
             info = read_archived_snapshot(self.i_archive_path_var.get().strip())
@@ -390,7 +402,7 @@ class HybridSierraPatcherGUI(ResilientSierraPatcherGUI):
                     32,
                 )
             except ValueError as exc:
-                messagebox.showerror("Invalid setting", str(exc))
+                messagebox.showerror(tr("Invalid setting"), str(exc))
                 return
             self._offline_source_config = (
                 "Archived snapshot",

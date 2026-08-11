@@ -1,5 +1,6 @@
 import os, re, shutil, sys
 from pathlib import Path
+from .i18n import tr
 from .registry import exe_version  # already in your codebase
 import webbrowser
 from tkinter import messagebox
@@ -59,14 +60,17 @@ def open_url(url: str):
     try:
         webbrowser.open(url, new=2)
     except Exception as e:
-        messagebox.showerror("Open link", f"Failed to open link:\n{e}")
+        messagebox.showerror(
+            tr("Open link"),
+            tr("Failed to open link:\n{error}", error=e),
+        )
 
 def copy_to_clipboard(root, text: str, toast: bool = True):
     try:
         root.clipboard_clear()
         root.clipboard_append(text)
         if toast:
-            messagebox.showinfo("Copied", "Copied to clipboard.")
+            messagebox.showinfo(tr("Copied"), tr("Copied to clipboard."))
     except Exception:
         pass
     from pathlib import Path
@@ -97,6 +101,5 @@ def format_bytes(n: int) -> str:
 
 def summarize_integrity_list(lst: list[str]) -> str:
     if not lst:
-        return "Tracked folders: (none)"
-    return "Tracked folders: " + ", ".join(lst)
-
+        return tr("Tracked folders: (none)")
+    return tr("Tracked folders: {folders}", folders=", ".join(lst))

@@ -9,6 +9,9 @@ from .hygiene import is_volatile_runtime_file
 from .patch_apply import PatchApplyError, apply_patches_resilient
 
 
+_BASE_APPLY_SINGLE_DETAILED = patch_apply._apply_single_detailed
+
+
 class ResilientSierraPatcherGUI(LayoutSierraPatcherGUI):
     """Current GUI with isolated patch retries and verbose failure diagnostics."""
 
@@ -23,7 +26,7 @@ class ResilientSierraPatcherGUI(LayoutSierraPatcherGUI):
         # Compatibility for already-published packages that accidentally contain
         # runtime-generated Vuplex Chromium logs. Those files are not real game
         # assets and may legitimately be absent or different on every machine.
-        self._base_apply_single_detailed = patch_apply._apply_single_detailed
+        self._base_apply_single_detailed = _BASE_APPLY_SINGLE_DETAILED
         patch_apply._apply_single_detailed = self._apply_single_with_volatile_skip
 
     def _apply_single_with_volatile_skip(

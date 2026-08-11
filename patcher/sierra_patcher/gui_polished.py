@@ -12,8 +12,10 @@ try:
 except ImportError:  # pragma: no cover - Sierra Patcher is Windows-targeted
     winreg = None
 
+from . import gui_web
 from .gui import _hide_console_on_windows, _safe_call
 from .gui_catalog import CatalogSierraPatcherGUI
+from .i18n import canonical_choice, tr
 from .paths import WORKING_DIR
 from .web_catalog import CATALOG_PLACEHOLDER
 from .web_download import _io_path
@@ -85,19 +87,16 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
                 widget.grid_configure(row=row + 1)
         self._release_hint.grid_configure(row=2, column=1, columnspan=2)
 
-        # Rename/bolden the two values a normal web install actually requires.
-        for widget in source_frame.winfo_children():
-            if isinstance(widget, ttk.Label) and widget.cget("text") == "Release ID":
-                widget.configure(text="Version / Release", font=("Segoe UI", 9, "bold"))
-                break
-        for widget in target_frame.winfo_children():
-            if isinstance(widget, ttk.Label) and widget.cget("text") == "Destination to patch":
-                widget.configure(font=("Segoe UI", 9, "bold"))
-                break
+        # These explicit references keep behavior independent from translated labels.
+        self.i_release_label.configure(
+            text=tr("Version / Release"),
+            font=("Segoe UI", 9, "bold"),
+        )
+        self.i_destination_label.configure(font=("Segoe UI", 9, "bold"))
 
         self._release_badge = tk.Label(
             source_frame,
-            text="REQUIRED",
+            text=tr("REQUIRED"),
             bg=self._REQUIRED_BG,
             fg=self._REQUIRED_FG,
             font=("Segoe UI", 8, "bold"),
@@ -108,7 +107,7 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
 
         self._destination_badge = tk.Label(
             target_frame,
-            text="REQUIRED",
+            text=tr("REQUIRED"),
             bg=self._REQUIRED_BG,
             fg=self._REQUIRED_FG,
             font=("Segoe UI", 8, "bold"),
@@ -143,13 +142,13 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
     def _set_badge(self, badge: tk.Label, ready: bool) -> None:
         if ready:
             badge.configure(
-                text="READY  ✓",
+                text=tr("READY  ✓"),
                 bg=self._READY_BG,
                 fg=self._READY_FG,
             )
         else:
             badge.configure(
-                text="REQUIRED",
+                text=tr("REQUIRED"),
                 bg=self._REQUIRED_BG,
                 fg=self._REQUIRED_FG,
             )
@@ -166,7 +165,7 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
         except tk.TclError:
             pass
 
-        web_mode = self.i_source_var.get() == "Web release"
+        web_mode = canonical_choice(self.i_source_var.get(), gui_web.PACKAGE_SOURCES) == "Web release"
         if not web_mode:
             self._release_badge.grid_remove()
             try:
@@ -179,7 +178,7 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
         release = self.i_web_release_var.get().strip()
         release_ready = bool(
             release
-            and release != CATALOG_PLACEHOLDER
+            and canonical_choice(release, (CATALOG_PLACEHOLDER,)) != CATALOG_PLACEHOLDER
             and release in tuple(self.i_web_release.cget("values"))
         )
         self._set_badge(self._release_badge, release_ready)
@@ -207,7 +206,9 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
         return super()._run_generate()
 
     def _run_install(self):
-        self._cleanup_web_cache_after_success = self.i_source_var.get() == "Web release"
+        self._cleanup_web_cache_after_success = (
+            canonical_choice(self.i_source_var.get(), gui_web.PACKAGE_SOURCES) == "Web release"
+        )
         cache_text = self.i_web_cache.get().strip()
         self._cleanup_web_cache_root = Path(cache_text or (Path(WORKING_DIR) / "web_cache"))
         return super()._run_install()
@@ -236,7 +237,7 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
             cache_root = getattr(self, "_cleanup_web_cache_root", None)
             if cache_root:
                 super()._set_phase("Cleaning download cache")
-                _safe_call(self, self._detail_var.set, "Removing downloaded patch data...")
+                _safe_call(self, self._detail_var.set, tr("Removing downloaded patch data..."))
                 try:
                     self._clear_managed_web_cache(cache_root)
                     self._log(f"[cache] cleared after successful install: {cache_root}")
@@ -247,10 +248,13 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
                     _safe_call(
                         self,
                         messagebox.showwarning,
-                        "Cache cleanup",
-                        "The patch installed successfully, but Sierra Patcher could not remove all downloaded cache files.\n\n"
-                        f"Cache location:\n{cache_root}\n\n"
-                        "You can delete the objects, packages, and manifests folders manually after closing the patcher.",
+                        tr("Cache cleanup"),
+                        tr(
+                            "The patch installed successfully, but Sierra Patcher could not remove all downloaded cache files.\n\n"
+                            "Cache location:\n{cache_root}\n\n"
+                            "You can delete the objects, packages, and manifests folders manually after closing the patcher.",
+                            cache_root=cache_root,
+                        ),
                     )
         return super()._set_phase(phase)
 
