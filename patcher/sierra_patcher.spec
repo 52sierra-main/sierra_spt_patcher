@@ -24,6 +24,12 @@ def P(*parts):
     return os.path.join(PR, *parts)
 
 
+# Build metadata is generated from sierra_patcher.__version__ so the Windows
+# VERSIONINFO resource stays in sync with the application's canonical version.
+from windows_version_info import build_version_info
+
+version_info = build_version_info(PR)
+
 block_cipher = None
 
 binaries = []
@@ -84,6 +90,7 @@ exe = EXE(
     [],
     name='sierra-patcher',
     icon=icon_path,
+    version=version_info,
     console=False,
     debug=False,
     strip=False,
