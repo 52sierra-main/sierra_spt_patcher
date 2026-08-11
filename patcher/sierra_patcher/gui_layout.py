@@ -189,7 +189,7 @@ class LayoutSierraPatcherGUI(PolishedSierraPatcherGUI):
         if not self._destination_value():
             messagebox.showerror(
                 tr("Destination required"),
-                tr("Select the pasted Live folder that Sierra Patcher should modify."),
+                tr("Select the pasted Live folder that needs to be patched."),
             )
             self.i_dest.focus_set()
             return
