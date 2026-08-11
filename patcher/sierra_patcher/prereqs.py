@@ -18,6 +18,7 @@ class DependencyRequirement:
     note: str = ""
     framework_name: str = ""
     minimum_version: str = ""
+    sources: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -55,16 +56,19 @@ def _download_url_for_version(version: str) -> str:
     return f"https://dotnet.microsoft.com/en-us/download/dotnet/{major}.{minor}"
 
 
-def _framework_label(framework: str, version: str) -> str:
-    parsed = _parse_version(version)
-    train = f"{parsed[0]}.{parsed[1]}" if parsed else version
+def _framework_friendly_name(framework: str) -> str:
     names = {
         "Microsoft.NETCore.App": ".NET Runtime",
         "Microsoft.AspNetCore.App": "ASP.NET Core Runtime",
         "Microsoft.WindowsDesktop.App": ".NET Desktop Runtime",
     }
-    friendly = names.get(framework, framework)
-    return f"{friendly} {train} x64"
+    return names.get(framework, framework)
+
+
+def _framework_label(framework: str, version: str) -> str:
+    parsed = _parse_version(version)
+    train = f"{parsed[0]}.{parsed[1]}" if parsed else version
+    return f"{_framework_friendly_name(framework)} {train} x64"
 
 
 def _framework_requirement(
@@ -72,25 +76,22 @@ def _framework_requirement(
     version: str,
     *,
     note: str = "",
+    sources: Iterable[str] = (),
 ) -> DependencyRequirement:
     parsed = _parse_version(version)
     if parsed is None:
         raise ValueError(f"Invalid .NET runtime version: {version!r}")
     major, minor, patch = parsed
     train = f"{major}.{minor}"
-    servicing_note = (
-        f"Requires {framework} {major}.{minor}.{patch} or a newer patch within the {train} runtime train."
-    )
-    if note:
-        servicing_note += f" {note}"
     return DependencyRequirement(
         key=f"runtime:{framework}:{train}",
         label=_framework_label(framework, version),
         runtime_check=f"{framework} >= {major}.{minor}.{patch} within {train}.x",
         download_url=_download_url_for_version(version),
-        note=servicing_note,
+        note=note,
         framework_name=framework,
         minimum_version=f"{major}.{minor}.{patch}",
+        sources=tuple(str(source) for source in sources if str(source).strip()),
     )
 
 
@@ -201,11 +202,18 @@ def _requirements_from_runtime_metadata(items) -> list[DependencyRequirement]:
         if not framework or _parse_version(version) is None:
             raise RuntimeError("runtime_requirements contains an invalid framework/version")
         sources = item.get("sources")
-        source_note = ""
-        if isinstance(sources, list) and sources:
-            names = ", ".join(str(source) for source in sources[:3])
-            source_note = f"Declared by {names}."
-        reqs.append(_framework_requirement(framework, version, note=source_note))
+        source_names = (
+            tuple(str(source) for source in sources[:3])
+            if isinstance(sources, list)
+            else ()
+        )
+        reqs.append(
+            _framework_requirement(
+                framework,
+                version,
+                sources=source_names,
+            )
+        )
     return _dedupe(reqs)
 
 
@@ -321,12 +329,51 @@ def missing_requirements_for_metadata(meta) -> list[DependencyRequirement]:
     ]
 
 
+def _localized_requirement_label(req: DependencyRequirement) -> str:
+    parsed = _parse_version(req.minimum_version)
+    if not req.framework_name or parsed is None:
+        return tr(req.label)
+
+    train = f"{parsed[0]}.{parsed[1]}"
+    return tr(
+        "{runtime_name} {train} x64",
+        runtime_name=tr(_framework_friendly_name(req.framework_name)),
+        train=train,
+    )
+
+
+def _localized_requirement_note(req: DependencyRequirement) -> str:
+    parts: list[str] = []
+    parsed = _parse_version(req.minimum_version)
+    if req.framework_name and parsed is not None:
+        major, minor, patch = parsed
+        parts.append(
+            tr(
+                "Requires {framework} {version} or a newer patch within the {train} runtime train.",
+                framework=req.framework_name,
+                version=f"{major}.{minor}.{patch}",
+                train=f"{major}.{minor}",
+            )
+        )
+        if req.sources:
+            parts.append(
+                tr(
+                    "Declared by {sources}.",
+                    sources=", ".join(req.sources[:3]),
+                )
+            )
+    if req.note:
+        parts.append(tr(req.note))
+    return " ".join(part for part in parts if part)
+
+
 def format_missing_requirements(requirements: Iterable[DependencyRequirement]) -> str:
     lines: list[str] = []
     for req in requirements:
-        lines.append(f"{tr(req.label)}\n{req.download_url}")
-        if req.note:
-            lines.append(tr(req.note))
+        lines.append(f"{_localized_requirement_label(req)}\n{req.download_url}")
+        note = _localized_requirement_note(req)
+        if note:
+            lines.append(note)
     return "\n\n".join(lines)
 
 
