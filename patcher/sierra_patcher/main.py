@@ -9,6 +9,7 @@ try:
     from .flags import is_dev_mode
     from .generation_guard import enable_generation_guard
     from .gui import _hide_console_on_windows
+    from .runtime_requirement_hooks import enable_runtime_requirement_hooks
     from .source_integrity_hooks import enable_source_integrity_hooks
 except ImportError:  # frozen exe starting main.py as a script
     import sierra_patcher.cli as cli
@@ -17,6 +18,7 @@ except ImportError:  # frozen exe starting main.py as a script
     from sierra_patcher.flags import is_dev_mode
     from sierra_patcher.generation_guard import enable_generation_guard
     from sierra_patcher.gui import _hide_console_on_windows
+    from sierra_patcher.runtime_requirement_hooks import enable_runtime_requirement_hooks
     from sierra_patcher.source_integrity_hooks import enable_source_integrity_hooks
 
 
@@ -24,9 +26,11 @@ def main(argv: list[str] | None = None) -> None:
     argv = sys.argv[1:] if argv is None else argv
     dev = is_dev_mode()
 
-    # Install source-integrity hooks before either CLI or GUI dispatch so newly
-    # generated releases always include exact delta-reference fingerprints.
+    # Install generation post-processing hooks before either CLI or GUI dispatch.
+    # Source integrity wraps the hybrid generator first; runtime discovery then
+    # wraps that result so both manifests are produced for every new release.
     enable_source_integrity_hooks()
+    enable_runtime_requirement_hooks()
 
     if argv:
         return cli.run_cli(argv, dev=dev)
