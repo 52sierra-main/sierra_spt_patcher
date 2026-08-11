@@ -9,6 +9,7 @@ try:
     from .flags import is_dev_mode
     from .generation_guard import enable_generation_guard
     from .gui import _hide_console_on_windows
+    from .source_integrity_hooks import enable_source_integrity_hooks
 except ImportError:  # frozen exe starting main.py as a script
     import sierra_patcher.cli as cli
     import sierra_patcher.gui_repository as gui
@@ -16,11 +17,17 @@ except ImportError:  # frozen exe starting main.py as a script
     from sierra_patcher.flags import is_dev_mode
     from sierra_patcher.generation_guard import enable_generation_guard
     from sierra_patcher.gui import _hide_console_on_windows
+    from sierra_patcher.source_integrity_hooks import enable_source_integrity_hooks
 
 
 def main(argv: list[str] | None = None) -> None:
     argv = sys.argv[1:] if argv is None else argv
     dev = is_dev_mode()
+
+    # Install source-integrity hooks before either CLI or GUI dispatch so newly
+    # generated releases always include exact delta-reference fingerprints.
+    enable_source_integrity_hooks()
+
     if argv:
         return cli.run_cli(argv, dev=dev)
 
