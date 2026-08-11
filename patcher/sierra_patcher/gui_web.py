@@ -761,7 +761,7 @@ class IntegratedSierraPatcherGUI(SierraPatcherGUI):
                             "Version mismatch detected.\n\n"
                             "Live client: {live_version}\n"
                             "Expected: {expected_version}\n\n"
-                            "Select the correct Tarkov folder or enable Force only if intentional.",
+                            "If your live version exceeds that of the patch, please wait for an update. Otherwise, please update your live game and try again.",
                             live_version=live_version,
                             expected_version=meta.version,
                         )
