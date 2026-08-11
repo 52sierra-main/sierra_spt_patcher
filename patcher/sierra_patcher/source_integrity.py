@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from .i18n import tr
 from .proc import Cancelled
 from .zstd_patch import _python_io_path
 
@@ -280,6 +281,8 @@ def verify_destination_sources(
 
 
 def describe_source_mismatch(mismatch: SourceHashMismatch) -> str:
+    """Return canonical English detail for logs and support diagnostics."""
+
     if mismatch.reason == "missing":
         return f"{mismatch.path}: missing"
     if mismatch.reason == "size":
@@ -293,24 +296,49 @@ def describe_source_mismatch(mismatch: SourceHashMismatch) -> str:
     )
 
 
+def _localized_source_mismatch(mismatch: SourceHashMismatch) -> str:
+    """Return a localized mismatch detail for the user-facing stop dialog."""
+
+    if mismatch.reason == "missing":
+        return tr("{path}: missing", path=mismatch.path)
+    if mismatch.reason == "size":
+        return tr(
+            "{path}: size mismatch (expected {expected:,}, found {actual:,} bytes)",
+            path=mismatch.path,
+            expected=mismatch.expected_size,
+            actual=mismatch.actual_size,
+        )
+    return tr(
+        "{path}: SHA-256 mismatch (expected {expected_sha}, found {actual_sha})",
+        path=mismatch.path,
+        expected_sha=mismatch.expected_sha256,
+        actual_sha=mismatch.actual_sha256,
+    )
+
+
 def format_source_integrity_summary(
     report: SourceIntegrityReport,
     *,
     max_items: int = 8,
 ) -> str:
     lines = [
-        "The selected Tarkov copy does not match the source files required by this release.",
+        tr("The selected Tarkov copy does not match the source files required by this release."),
         "",
-        f"Checked: {report.total}",
-        f"Matched: {report.matched}",
-        f"Mismatched: {report.failed}",
+        tr("Checked: {count}", count=report.total),
+        tr("Matched: {count}", count=report.matched),
+        tr("Mismatched: {count}", count=report.failed),
         "",
-        "No game files were modified.",
+        tr("No game files were modified."),
     ]
     if report.mismatches:
-        lines.extend(["", "Examples:"])
+        lines.extend(["", tr("Examples:")])
         for mismatch in report.mismatches[:max_items]:
-            lines.append(f"- {describe_source_mismatch(mismatch)}")
+            lines.append(f"- {_localized_source_mismatch(mismatch)}")
         if report.failed > max_items:
-            lines.append(f"... and {report.failed - max_items} more. See Logs for details.")
+            lines.append(
+                tr(
+                    "... and {count} more. See Logs for details.",
+                    count=report.failed - max_items,
+                )
+            )
     return "\n".join(lines)
