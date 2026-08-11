@@ -26,14 +26,17 @@ def main(argv: list[str] | None = None) -> None:
 
     _hide_console_on_windows()
     enable_generation_guard()
-    app = gui.RepositorySierraPatcherGUI(dev=dev)
+    while True:
+        app = gui.RepositorySierraPatcherGUI(dev=dev)
 
-    # Keep the first visible native frame from being painted with Windows' light
-    # title bar before the DWM dark-mode attribute is ready.
-    app.withdraw()
-    install_dark_theme(app)
-    present_main_window(app)
-    app.mainloop()
+        # Keep the first visible native frame from being painted with Windows' light
+        # title bar before the DWM dark-mode attribute is ready.
+        app.withdraw()
+        install_dark_theme(app)
+        present_main_window(app)
+        app.mainloop()
+        if not getattr(app, "_restart_requested", False):
+            break
 
 
 if __name__ == "__main__":

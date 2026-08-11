@@ -301,6 +301,19 @@ def _normalized_color(value: object) -> str:
 
 
 def _theme_classic_widget(widget: tk.Misc) -> None:
+    if isinstance(widget, tk.Menu):
+        try:
+            widget.configure(
+                background=INPUT_BG,
+                foreground=TEXT,
+                activebackground=HOVER_BG,
+                activeforeground=TEXT,
+                selectcolor=ACCENT,
+            )
+        except tk.TclError:
+            pass
+        return
+
     if isinstance(widget, (tk.Tk, tk.Toplevel)):
         try:
             widget.configure(background=WINDOW_BG)
@@ -424,6 +437,12 @@ def install_dark_theme(app: tk.Tk) -> None:
     app.option_add("*Menu.activeForeground", TEXT)
 
     _theme_tree(app)
+    try:
+        menu_name = str(app.cget("menu"))
+        if menu_name:
+            _theme_tree(app.nametowidget(menu_name))
+    except (KeyError, tk.TclError):
+        pass
 
     # Dependency prompts and other Toplevels are created later. Theme widgets as
     # they are mapped so those windows match the main application automatically.
