@@ -8,14 +8,16 @@
   - Compare the selected destination EXE version against the release metadata before any patch files are applied.
   - Stop with a clear incompatibility message if the destination copy is the wrong version.
 
-## Next major / planned improvements
+## Completed
 
-- [ ] Improve .NET dependency detection and warnings.
-  - Prefer runtime requirements derived from the target SPT runtimeconfig files when generating a release.
-  - Detect the actual required framework family (for example `Microsoft.NETCore.App` / `Microsoft.AspNetCore.App`) and minimum servicing version.
-  - Treat newer compatible patches in the same major/minor runtime train as valid; do not treat a higher major runtime as an automatic substitute.
-  - Keep user-facing labels/download links at the normal major/minor level (for example .NET 9.0 / 10.0).
-  - Preserve the current hardcoded SPT-version inference as a fallback for older Sierra packages.
+- [x] Improve .NET dependency detection and warnings.
+  - Runtime requirements are derived from the target SPT `*.runtimeconfig.json` files when generating new releases.
+  - Exact framework families and minimum servicing versions are recorded.
+  - A newer patch in the same major/minor runtime train is accepted; a higher major alone is not treated as a substitute.
+  - User-facing labels and Microsoft download links stay at the normal major/minor level.
+  - Older Sierra packages still use the existing SPT-version inference fallback.
+
+## Next major / planned improvements
 
 - [ ] Replace the current trivially discoverable dev-mode activation with stronger author access control.
   - Keep `dev.enable` only as a local/discovery gate if useful.
