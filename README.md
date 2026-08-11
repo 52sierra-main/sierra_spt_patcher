@@ -2,7 +2,7 @@
 
 **Sierra Installer** is a Windows patcher and delivery tool for installing supported versions of **SPT (Single Player Tarkov)** from a clean copy of Escape from Tarkov.
 
-Instead of redistributing a complete game installation, Sierra applies verified patch data to the user's own Tarkov copy. Releases can be installed directly from Sierra's web repository or kept as **Archived snapshots** for local/offline use.
+Instead of redistributing a complete game installation, the installer applies verified patch data to the user's own Tarkov copy. Releases can be installed directly from Sierra's web repository or kept as **Archived snapshots** for local/offline use.
 
 ## In service
 
