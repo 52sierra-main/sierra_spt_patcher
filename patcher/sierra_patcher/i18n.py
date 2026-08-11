@@ -163,6 +163,20 @@ _KO = {
         "{relative}: 예상 {expected:,}바이트, 실제 {actual:,}바이트",
     "Verifying source files": "원본 파일 확인 중",
     "Source files mismatch": "원본 파일 불일치",
+    "The selected Tarkov copy does not match the source files required by this release.":
+        "선택한 타르코프 복사본이 이 릴리스에 필요한 원본 파일과 일치하지 않아요.",
+    "Checked: {count}": "검사한 파일: {count}",
+    "Matched: {count}": "일치: {count}",
+    "Mismatched: {count}": "불일치: {count}",
+    "No game files were modified.": "게임 파일은 변경되지 않았어요.",
+    "Examples:": "예시:",
+    "{path}: missing": "{path}: 파일 없음",
+    "{path}: size mismatch (expected {expected:,}, found {actual:,} bytes)":
+        "{path}: 크기 불일치 (예상 {expected:,}바이트, 실제 {actual:,}바이트)",
+    "{path}: SHA-256 mismatch (expected {expected_sha}, found {actual_sha})":
+        "{path}: SHA-256 불일치 (예상 {expected_sha}, 실제 {actual_sha})",
+    "... and {count} more. See Logs for details.":
+        "... 외 {count}개가 더 있어요. 자세한 내용은 로그를 확인해 주세요.",
     "Cache cleanup": "캐시 정리",
     "The patch installed successfully, but Sierra Patcher could not remove all downloaded cache files.\n\nCache location:\n{cache_root}\n\nYou can delete the objects, packages, and manifests folders manually after closing the patcher.":
         "패치는 성공적으로 설치했지만 다운로드 캐시 일부를 삭제하지 못했어요.\n\n캐시 위치:\n{cache_root}\n\n패처를 닫은 뒤 objects, packages, manifests 폴더를 직접 삭제해도 돼요.",
@@ -180,6 +194,13 @@ _KO = {
     # Dependency prompt
     ".NET Dependencies": ".NET 필수 구성 요소",
     ".NET Framework 4.7.2 or newer": ".NET Framework 4.7.2 이상",
+    ".NET Runtime": ".NET 런타임",
+    "ASP.NET Core Runtime": "ASP.NET Core 런타임",
+    ".NET Desktop Runtime": ".NET 데스크톱 런타임",
+    "{runtime_name} {train} x64": "{runtime_name} {train} x64",
+    "Requires {framework} {version} or a newer patch within the {train} runtime train.":
+        "{framework} {version} 이상, {train} 런타임 계열의 더 최신 패치 버전이 필요해요.",
+    "Declared by {sources}.": "{sources}에서 요구하는 구성 요소예요.",
     "{release} needs additional Microsoft .NET components.":
         "{release}에 Microsoft .NET 구성 요소가 추가로 필요해요.",
     "Install these from Microsoft, then press Install again. You can continue if you have already installed them elsewhere.":
