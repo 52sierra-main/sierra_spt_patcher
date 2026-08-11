@@ -35,7 +35,7 @@ _NETFX_472 = DependencyRequirement(
 def _parse_version(text: str | None) -> tuple[int, int, int] | None:
     if not text:
         return None
-    match = re.match(r"^\s*(\d+)\.(\d+)(?:\.(\d+))?", str(text))
+    match = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", str(text))
     if not match:
         return None
     return (
