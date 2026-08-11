@@ -4,8 +4,10 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
 
+from . import gui_web
 from .gui import _hide_console_on_windows
 from .gui_polished import PolishedSierraPatcherGUI
+from .i18n import canonical_choice, tr
 
 
 class LayoutSierraPatcherGUI(PolishedSierraPatcherGUI):
@@ -34,7 +36,7 @@ class LayoutSierraPatcherGUI(PolishedSierraPatcherGUI):
         self._advanced_open = False
         self._advanced_button = ttk.Button(
             source_frame,
-            text="Advanced ▸",
+            text=tr("Advanced ▸"),
             command=self._toggle_advanced_section,
         )
         self._advanced_button.grid(
@@ -74,7 +76,7 @@ class LayoutSierraPatcherGUI(PolishedSierraPatcherGUI):
         )
         ttk.Label(
             self._advanced_frame,
-            text=(
+            text=tr(
                 "These settings normally do not need to be changed. Downloaded cache is "
                 "removed automatically after a successful web installation."
             ),
@@ -106,7 +108,7 @@ class LayoutSierraPatcherGUI(PolishedSierraPatcherGUI):
     def _set_advanced_open(self, opened: bool) -> None:
         self._advanced_open = bool(opened)
         if self._advanced_open:
-            self._advanced_button.configure(text="Advanced ▾")
+            self._advanced_button.configure(text=tr("Advanced ▾"))
             self._advanced_frame.grid(
                 row=4,
                 column=0,
@@ -116,11 +118,11 @@ class LayoutSierraPatcherGUI(PolishedSierraPatcherGUI):
                 pady=(0, 6),
             )
         else:
-            self._advanced_button.configure(text="Advanced ▸")
+            self._advanced_button.configure(text=tr("Advanced ▸"))
             self._advanced_frame.grid_remove()
 
     def _toggle_advanced_section(self) -> None:
-        if self.i_source_var.get() != "Web release":
+        if canonical_choice(self.i_source_var.get(), gui_web.PACKAGE_SOURCES) != "Web release":
             return
         self._set_advanced_open(not self._advanced_open)
 
@@ -129,7 +131,7 @@ class LayoutSierraPatcherGUI(PolishedSierraPatcherGUI):
         if not hasattr(self, "_advanced_button"):
             return result
 
-        web_mode = self.i_source_var.get() == "Web release"
+        web_mode = canonical_choice(self.i_source_var.get(), gui_web.PACKAGE_SOURCES) == "Web release"
         self._advanced_button.configure(state="normal" if web_mode else "disabled")
         if not web_mode and self._advanced_open:
             self._set_advanced_open(False)
@@ -137,14 +139,17 @@ class LayoutSierraPatcherGUI(PolishedSierraPatcherGUI):
 
     def _destination_value(self) -> str:
         value = (self.i_dest_var.get() or "").strip()
-        if value == self._DEST_PLACEHOLDER:
+        if canonical_choice(value, (self._DEST_PLACEHOLDER,)) == self._DEST_PLACEHOLDER:
             return ""
         return value
 
     def _clear_destination_placeholder(self, _event=None) -> None:
         if not getattr(self, "_destination_placeholder_ready", False):
             return
-        if (self.i_dest_var.get() or "").strip() == self._DEST_PLACEHOLDER:
+        if canonical_choice(
+            (self.i_dest_var.get() or "").strip(),
+            (self._DEST_PLACEHOLDER,),
+        ) == self._DEST_PLACEHOLDER:
             self.i_dest_var.set("")
             try:
                 self.i_dest.configure(style="Required.TEntry")
@@ -155,7 +160,7 @@ class LayoutSierraPatcherGUI(PolishedSierraPatcherGUI):
         if not getattr(self, "_destination_placeholder_ready", False):
             return
         if not (self.i_dest_var.get() or "").strip():
-            self.i_dest_var.set(self._DEST_PLACEHOLDER)
+            self.i_dest_var.set(tr(self._DEST_PLACEHOLDER))
             try:
                 self.i_dest.configure(style="Placeholder.TEntry")
             except tk.TclError:
@@ -168,9 +173,12 @@ class LayoutSierraPatcherGUI(PolishedSierraPatcherGUI):
 
         destination = self._destination_value()
         if not destination:
-            self._dest_hint.configure(text="Destination folder is required.")
+            self._dest_hint.configure(text=tr("Destination folder is required."))
             self._dest_hint.grid()
-            if (self.i_dest_var.get() or "").strip() == self._DEST_PLACEHOLDER:
+            if canonical_choice(
+                (self.i_dest_var.get() or "").strip(),
+                (self._DEST_PLACEHOLDER,),
+            ) == self._DEST_PLACEHOLDER:
                 try:
                     self.i_dest.configure(style="Placeholder.TEntry")
                 except tk.TclError:
@@ -180,8 +188,8 @@ class LayoutSierraPatcherGUI(PolishedSierraPatcherGUI):
     def _run_install(self):
         if not self._destination_value():
             messagebox.showerror(
-                "Destination required",
-                "Select the pasted Live folder that Sierra Patcher should modify.",
+                tr("Destination required"),
+                tr("Select the pasted Live folder that Sierra Patcher should modify."),
             )
             self.i_dest.focus_set()
             return

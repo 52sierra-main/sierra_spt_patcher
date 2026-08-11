@@ -38,6 +38,7 @@ def main(argv: list[str] | None = None) -> None:
     _hide_console_on_windows()
     enable_generation_guard()
     app = gui.RepositorySierraPatcherGUI(dev=dev)
+    app.apply_startup_language(present=False)
 
     # Keep the first visible native frame from being painted with Windows' light
     # title bar before the DWM dark-mode attribute is ready.

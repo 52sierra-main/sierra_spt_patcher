@@ -21,6 +21,20 @@ from .zstd_patch import (
     count_dest_files, count_patch_files,
 )
 from .delete_list import build_delete_list, finalize
+from .i18n import (
+    DEFAULT_LANGUAGE,
+    SUPPORTED_LANGUAGES,
+    alternate_language,
+    canonical_exact_text,
+    canonical_text,
+    canonical_choice,
+    current_language,
+    retranslate,
+    retranslate_exact,
+    set_language,
+    tr,
+    tr_progress,
+)
 from .prereqs import format_missing_requirements, missing_requirements_for_metadata
 from . import proc
 
@@ -57,20 +71,28 @@ def _safe_call(widget, func, *args, **kwargs):
 # -----------------------------
 class SierraPatcherGUI(tk.Tk):
     def __init__(self, dev: bool = False):
+        startup_language = current_language()
+        if startup_language != DEFAULT_LANGUAGE:
+            set_language(DEFAULT_LANGUAGE)
         super().__init__()
+        self.withdraw()
+        self._startup_language = startup_language
+        self._language_change_in_progress = False
         self.title("Sierra Installer")
-        self.geometry("800x460")
+        self.geometry("800x520")
         self.resizable(False, False)
 
-        self.grid_rowconfigure(0, weight=0)   # notebook row: no vertical stretch
-        self.grid_rowconfigure(1, weight=0)   # progress row: no vertical stretch
-        self.grid_rowconfigure(2, weight=1)   # spacer row: absorbs extra height
+        self.grid_rowconfigure(0, weight=0)   # app header
+        self.grid_rowconfigure(1, weight=0)   # notebook row: no vertical stretch
+        self.grid_rowconfigure(2, weight=0)   # progress row: no vertical stretch
+        self.grid_rowconfigure(3, weight=1)   # spacer row: absorbs extra height
         self.grid_columnconfigure(0, weight=1)
+        self._build_language_switcher()
 
         nb = ttk.Notebook(self, height=340)
-        nb.grid(row=0, column=0, sticky="ew", padx=0, pady=(0,2))
+        nb.grid(row=1, column=0, sticky="ew", padx=0, pady=(0,2))
 
-        self._phase_var = tk.StringVar(value="Idle")
+        self._phase_var = tk.StringVar(value=tr("Idle"))
         self._detail_var = tk.StringVar(value="")
         self._total_var = 1
         self._done_var = 0
@@ -83,19 +105,19 @@ class SierraPatcherGUI(tk.Tk):
         
         if dev:
             self._gen_tab = self._build_generate_tab(nb)
-            nb.add(self._gen_tab, text="Generate")
+            nb.add(self._gen_tab, text=tr("Generate"))
 
         self._ins_tab = self._build_install_tab(nb)
         self._log_tab = self._build_log_tab(nb)
         self._information = self._build_information_tab(nb)
 
-        nb.add(self._ins_tab, text="Install")
-        nb.add(self._log_tab, text="Logs")
-        nb.add(self._information, text="info")
+        nb.add(self._ins_tab, text=tr("Install"))
+        nb.add(self._log_tab, text=tr("Logs"))
+        nb.add(self._information, text=tr("Info"))
 
         # Shared progress widgets below notebook
-        pframe = ttk.LabelFrame(self, text="Progress")
-        pframe.grid(row=1, column=0, sticky="ew", padx=10, pady=(0,0))
+        pframe = ttk.LabelFrame(self, text=tr("Progress"))
+        pframe.grid(row=2, column=0, sticky="ew", padx=10, pady=(0,0))
         self._prog_bar = ttk.Progressbar(pframe, mode="determinate")
         self._prog_bar.pack(fill=tk.X, padx=12, pady=1)
         ttk.Label(pframe, textvariable=self._phase_var).pack(anchor="w", padx=12)
@@ -105,6 +127,373 @@ class SierraPatcherGUI(tk.Tk):
         if os.path.exists(icon_path):
             self.iconbitmap(icon_path)
 
+        self._startup_language_callback = self.after_idle(
+            self.apply_startup_language
+        )
+
+    def apply_startup_language(self, *, present: bool = True) -> None:
+        callback = self._startup_language_callback
+        self._startup_language_callback = None
+        if callback is not None:
+            try:
+                self.after_cancel(callback)
+            except tk.TclError:
+                pass
+        language = self._startup_language
+        self._startup_language = None
+        if language is not None and language != current_language():
+            set_language(language)
+            self._refresh_language()
+        if present:
+            self.deiconify()
+
+    def _build_language_switcher(self) -> None:
+        toolbar = ttk.Frame(self, style="LanguageBar.TFrame")
+        toolbar.grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 5))
+        toolbar.columnconfigure(0, weight=1)
+
+        ttk.Label(
+            toolbar,
+            text="Sierra Installer",
+            style="AppTitle.TLabel",
+        ).grid(row=0, column=0, sticky="w")
+
+        controls = ttk.Frame(toolbar, style="LanguageBar.TFrame")
+        controls.grid(row=0, column=1, sticky="e")
+        self._language_label = ttk.Label(
+            controls,
+            text=tr("Language"),
+            style="LanguageLabel.TLabel",
+        )
+        self._language_label.grid(row=0, column=0, padx=(0, 7))
+
+        self._language_buttons = {}
+        for code, label in SUPPORTED_LANGUAGES.items():
+            button = ttk.Button(
+                controls,
+                text=label,
+                width=8,
+                command=lambda selected=code: self._change_language(selected),
+            )
+            button.grid(
+                row=0,
+                column=len(self._language_buttons) + 1,
+                padx=(0, 3) if self._language_buttons else 0,
+            )
+            self._language_buttons[code] = button
+
+        ttk.Separator(toolbar).grid(
+            row=1,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=(7, 0),
+        )
+        self._language_toolbar = toolbar
+        self._sync_language_switcher()
+        self.bind("<Control-Shift-KeyPress-L>", self._toggle_language_event)
+        self.bind("<Control-Shift-KeyPress-l>", self._toggle_language_event)
+
+    def _sync_language_switcher(self) -> None:
+        self._language_label.configure(text=tr("Language"))
+        active_language = current_language()
+        for code, button in self._language_buttons.items():
+            style = (
+                "LanguageSelected.TButton"
+                if code == active_language
+                else "Language.TButton"
+            )
+            button.configure(style=style)
+
+    def _toggle_language(self) -> None:
+        self._change_language(alternate_language())
+
+    def _toggle_language_event(self, _event=None):
+        self._toggle_language()
+        return "break"
+
+    def _task_running(self) -> bool:
+        if (
+            getattr(self, "_install_running", False)
+            or getattr(self, "_generation_running", False)
+            or getattr(self, "_repository_running", False)
+        ):
+            return True
+        for name in ("btn_abort_ins", "btn_abort_gen"):
+            button = getattr(self, name, None)
+            if button is not None:
+                try:
+                    if "disabled" not in button.state():
+                        return True
+                except tk.TclError:
+                    pass
+        return False
+
+    @staticmethod
+    def _widget_tree(root):
+        pending = list(root.winfo_children())
+        while pending:
+            widget = pending.pop()
+            yield widget
+            try:
+                pending.extend(widget.winfo_children())
+            except tk.TclError:
+                pass
+
+    @staticmethod
+    def _translated_value(
+        current: str,
+        sources: dict[str, str],
+        *,
+        formatted: bool = True,
+    ) -> str:
+        source = sources.get(current)
+        if source is None:
+            source = (
+                canonical_text(current)
+                if formatted
+                else canonical_exact_text(current)
+            )
+        translated = retranslate(source) if formatted else retranslate_exact(source)
+        if source != current or translated != current:
+            sources[current] = source
+            sources[translated] = source
+        return translated
+
+    @staticmethod
+    def _translated_choice_value(
+        current: str,
+        sources: dict[str, str],
+        choices: tuple[str, ...],
+    ) -> str:
+        source = sources.get(current)
+        if source is None:
+            source = canonical_choice(current, choices)
+            if source not in choices:
+                return current
+        translated = tr(source)
+        sources[current] = source
+        sources[translated] = source
+        return translated
+
+    @staticmethod
+    def _retranslate_widget_text(widget) -> None:
+        try:
+            current = str(widget.cget("text"))
+        except (AttributeError, tk.TclError):
+            return
+        sources = getattr(widget, "_language_text_sources", None)
+        if sources is None:
+            sources = {}
+            widget._language_text_sources = sources
+        translated = SierraPatcherGUI._translated_value(current, sources)
+        if translated != current:
+            try:
+                widget.configure(text=translated)
+            except tk.TclError:
+                pass
+
+    @staticmethod
+    def _retranslate_notebook(notebook: ttk.Notebook) -> None:
+        try:
+            tabs = notebook.tabs()
+        except tk.TclError:
+            return
+        tab_sources = getattr(notebook, "_language_tab_sources", None)
+        if tab_sources is None:
+            tab_sources = {}
+            notebook._language_tab_sources = tab_sources
+        for tab_id in tabs:
+            try:
+                current = str(notebook.tab(tab_id, "text"))
+                sources = tab_sources.setdefault(str(tab_id), {})
+                translated = SierraPatcherGUI._translated_value(
+                    current,
+                    sources,
+                    formatted=False,
+                )
+                if translated != current:
+                    notebook.tab(tab_id, text=translated)
+            except tk.TclError:
+                continue
+
+    def _retranslate_combobox(self, combobox: ttk.Combobox) -> str | None:
+        try:
+            raw_values = combobox.cget("values")
+            if isinstance(raw_values, str):
+                raw_values = combobox.tk.splitlist(raw_values)
+            values = tuple(str(value) for value in raw_values)
+            sources = getattr(combobox, "_language_value_sources", None)
+            if sources is None:
+                sources = {}
+                combobox._language_value_sources = sources
+
+            fixed_choices: tuple[str, ...] | None = None
+            if combobox is getattr(self, "i_web_release", None):
+                fixed_choices = ("choose version",)
+            elif combobox is getattr(self, "r_release", None):
+                fixed_choices = ("choose release",)
+
+            def translate(value: str) -> str:
+                if fixed_choices is not None:
+                    return self._translated_choice_value(
+                        value,
+                        sources,
+                        fixed_choices,
+                    )
+                return self._translated_value(
+                    value,
+                    sources,
+                    formatted=False,
+                )
+
+            translated_values = tuple(
+                translate(value)
+                for value in values
+            )
+            if translated_values != values:
+                combobox.configure(values=translated_values)
+
+            current = combobox.get()
+            translated = translate(current)
+            if translated != current:
+                combobox.set(translated)
+            variable_name = str(combobox.cget("textvariable"))
+            return variable_name or None
+        except tk.TclError:
+            return None
+
+    def _retranslate_textvariable(
+        self,
+        widget,
+        translated_variables: set[str],
+        formatted_variables: set[str],
+    ) -> None:
+        if not isinstance(widget, (tk.Label, tk.Message, ttk.Label)):
+            return
+        try:
+            variable_name = str(widget.cget("textvariable"))
+        except (AttributeError, tk.TclError):
+            return
+        if not variable_name or variable_name in translated_variables:
+            return
+        translated_variables.add(variable_name)
+        variable_sources = getattr(self, "_language_variable_sources", None)
+        if variable_sources is None:
+            variable_sources = {}
+            self._language_variable_sources = variable_sources
+        sources = variable_sources.setdefault(variable_name, {})
+        try:
+            current = str(self.getvar(variable_name))
+            detail_variable = getattr(self, "_detail_var", None)
+            if detail_variable is not None and variable_name == str(detail_variable):
+                translated = tr_progress(current)
+            else:
+                translated = self._translated_value(
+                    current,
+                    sources,
+                    formatted=variable_name in formatted_variables,
+                )
+            if translated != current:
+                self.setvar(variable_name, translated)
+        except (KeyError, tk.TclError):
+            pass
+
+    def _refresh_language(self) -> None:
+        status_variables = getattr(self, "_stat", {})
+        translated_variables = {
+            str(variable)
+            for variable in status_variables.values()
+        }
+        formatted_variables = {
+            str(variable)
+            for variable in (
+                getattr(self, "g_integrity_var", None),
+                getattr(self, "r_status_var", None),
+            )
+            if variable is not None
+        }
+        for widget in self._widget_tree(self):
+            self._retranslate_widget_text(widget)
+            if isinstance(widget, ttk.Notebook):
+                self._retranslate_notebook(widget)
+            if isinstance(widget, ttk.Combobox):
+                variable_name = self._retranslate_combobox(widget)
+                if variable_name:
+                    translated_variables.add(variable_name)
+            else:
+                self._retranslate_textvariable(
+                    widget,
+                    translated_variables,
+                    formatted_variables,
+                )
+
+        destination_var = getattr(self, "i_dest_var", None)
+        if destination_var is not None:
+            variable_sources = getattr(self, "_language_variable_sources", None)
+            if variable_sources is None:
+                variable_sources = {}
+                self._language_variable_sources = variable_sources
+            sources = variable_sources.setdefault(str(destination_var), {})
+            try:
+                current = destination_var.get()
+                translated = self._translated_choice_value(
+                    current,
+                    sources,
+                    ("Select pasted Live folder",),
+                )
+                if translated != current:
+                    destination_var.set(translated)
+            except tk.TclError:
+                pass
+
+        if status_variables:
+            self._refresh_status()
+
+        self._sync_language_switcher()
+        self.update_idletasks()
+
+    def _change_language(self, language: str) -> None:
+        if language == current_language() or self._language_change_in_progress:
+            return
+        if self._task_running():
+            self._sync_language_switcher()
+            messagebox.showwarning(
+                tr("Language"),
+                tr("A task is running. Wait for it to finish or cancel it before changing the language."),
+            )
+            return
+
+        previous_language = current_language()
+        self._language_change_in_progress = True
+        try:
+            set_language(language)
+            self._refresh_language()
+        except Exception as exc:
+            set_language(previous_language)
+            try:
+                self._refresh_language()
+            except Exception:
+                pass
+            messagebox.showerror(
+                tr("Language"),
+                tr("The language could not be changed:\n{error}", error=exc),
+            )
+            return
+        finally:
+            self._language_change_in_progress = False
+
+        try:
+            set_language(language, persist=True)
+        except OSError as exc:
+            messagebox.showwarning(
+                tr("Language"),
+                tr(
+                    "The language changed for this session, but the preference could not be saved:\n{error}",
+                    error=exc,
+                ),
+            )
+
     # ---------- Shared progress helpers ----------
     def _phase_progress(self, current: int | float, total: int | float, message: str = ""):
         """Set progress bar to an absolute position (current/total) and update detail text."""
@@ -113,7 +502,7 @@ class SierraPatcherGUI(tk.Tk):
             cur = max(0, min(int(current), tot))
             self._prog_bar.configure(mode="determinate", maximum=tot, value=cur)
             if message:
-                self._detail_var.set(message)
+                self._detail_var.set(tr_progress(message))
             self._prog_bar.update_idletasks()
         _safe_call(self, _do)
 
@@ -122,7 +511,7 @@ class SierraPatcherGUI(tk.Tk):
         def _do():
             self._total_var = max(1, total)
             self._done_var = 0
-            self._phase_var.set(phase)
+            self._phase_var.set(tr(phase))
             self._detail_var.set("")
             self._prog_bar.configure(mode="determinate", maximum=self._total_var, value=0)
         _safe_call(self, _do)
@@ -132,12 +521,12 @@ class SierraPatcherGUI(tk.Tk):
             self._done_var += 1
             self._prog_bar['value'] = self._done_var
             if message:
-                self._detail_var.set(message)
+                self._detail_var.set(tr_progress(message))
             self._prog_bar.update_idletasks()
         _safe_call(self, _do)
 
     def _set_phase(self, phase: str):
-        _safe_call(self, self._phase_var.set, phase)
+        _safe_call(self, self._phase_var.set, tr(phase))
 
     def _abort_generate(self):
         try:
@@ -162,7 +551,7 @@ class SierraPatcherGUI(tk.Tk):
         self._cancel.set()                         # co-operative stop
         self._set_phase("Stopped")
         self._phase_progress(0, 1, "")             # empty the bar
-        _safe_call(self, messagebox.showwarning, title, text)
+        _safe_call(self, messagebox.showwarning, tr(title), tr(text))
 
 
     # ---------- tab helpers ----------
@@ -174,7 +563,9 @@ class SierraPatcherGUI(tk.Tk):
         if valid:
             self._dest_hint.grid_remove()
         else:
-            self._dest_hint.configure(text="Destination folder is required." if not dst else "Folder does not exist.")
+            self._dest_hint.configure(
+                text=tr("Destination folder is required.") if not dst else tr("Folder does not exist.")
+            )
             self._dest_hint.grid()
 
         # Button state
@@ -185,7 +576,7 @@ class SierraPatcherGUI(tk.Tk):
 
     def _status_row(self, parent, row: int, col: int, label: str,
                 var: tk.StringVar, kind: str = "text"):
-        ttk.Label(parent, text=label, foreground="#666").grid(row=row, column=col, sticky="w", padx=8)
+        ttk.Label(parent, text=tr(label), foreground="#666").grid(row=row, column=col, sticky="w", padx=8)
 
         if kind == "path":
             # Read-only single-line field that can horizontally scroll with caret
@@ -214,7 +605,7 @@ class SierraPatcherGUI(tk.Tk):
 
 
     def _browse_and_refresh(self, entry: ttk.Entry):
-        d = filedialog.askdirectory(title="Select folder")
+        d = filedialog.askdirectory(title=tr("Select folder"))
         if d:
             entry.delete(0, tk.END)
             entry.insert(0, d)
@@ -254,12 +645,16 @@ class SierraPatcherGUI(tk.Tk):
         try:
             phys = psutil.cpu_count(logical=False) or 1
             logi = psutil.cpu_count(logical=True) or phys
-            cores = f"{phys} cores / {logi} threads"
+            cores = tr("{physical} cores / {logical} threads", physical=phys, logical=logi)
         except Exception:
             cores = "—"
         try:
             vm = psutil.virtual_memory()
-            ram = f"{self._format_bytes(vm.total)} total, {self._format_bytes(vm.available)} free"
+            ram = tr(
+                "{total} total, {available} free",
+                total=self._format_bytes(vm.total),
+                available=self._format_bytes(vm.available),
+            )
         except Exception:
             ram = "—"
 
@@ -289,13 +684,13 @@ class SierraPatcherGUI(tk.Tk):
                 self._stat["tk_version"].set(exe_version(exe) or "—") #inst["display_version"] or 
                 self._stat["tk_publisher"].set("—")#inst["publisher"] or 
             else:
-                self._stat["tk_path"].set("Not found")
-                self._stat["tk_version"].set("not found")
-                self._stat["tk_publisher"].set("not found")
+                self._stat["tk_path"].set(tr("Not found"))
+                self._stat["tk_version"].set(tr("not found"))
+                self._stat["tk_publisher"].set(tr("not found"))
         except Exception:
-            self._stat["tk_path"].set("error")
-            self._stat["tk_version"].set("error")
-            self._stat["tk_publisher"].set("error")
+            self._stat["tk_path"].set(tr("error"))
+            self._stat["tk_version"].set(tr("error"))
+            self._stat["tk_publisher"].set(tr("error"))
 
         # --- Destination (chosen folder) ---
         dst = self.i_dest.get().strip()
@@ -322,8 +717,13 @@ class SierraPatcherGUI(tk.Tk):
         self.g_threads = ttk.Spinbox(f, from_=1, to=64)
         self.g_threads.delete(0, tk.END)
         self.g_threads.insert(0, str(optimal_threads()))
-        self.g_diff_profile = tk.StringVar(value="Balanced")
-        diff_box = ttk.Combobox(f, textvariable=self.g_diff_profile, state="readonly", values=list(DIFF_PRESETS.keys()))
+        self.g_diff_profile = tk.StringVar(value=tr("Balanced"))
+        diff_box = ttk.Combobox(
+            f,
+            textvariable=self.g_diff_profile,
+            state="readonly",
+            values=[tr(label) for label in DIFF_PRESETS],
+        )
 
         self._row(f, 0, "Source (clean game)", self.g_source,
                     browse=lambda: self._browse(self.g_source))
@@ -336,9 +736,9 @@ class SierraPatcherGUI(tk.Tk):
 
         # --- Integrity check folders ----------------------------------------
         self.g_integrity_folders: list[str] = [] # type: ignore
-        self.g_integrity_var = tk.StringVar(value="Tracked folders: (none)")
+        self.g_integrity_var = tk.StringVar(value=tr("Tracked folders: (none)"))
 
-        card = ttk.LabelFrame(f, text="Integrity check folders")
+        card = ttk.LabelFrame(f, text=tr("Integrity check folders"))
         card.grid(row=6, column=0, columnspan=3, sticky="ew",
                       padx=12, pady=(6, 4))
         card.columnconfigure(0, weight=1)
@@ -351,13 +751,13 @@ class SierraPatcherGUI(tk.Tk):
             src = Path(self.g_source.get().strip())
             if not src.is_dir():
                 messagebox.showwarning(
-                    "Source required",
-                    "Select a valid Source (clean game) folder first.",
+                    tr("Source required"),
+                    tr("Select a valid Source (clean game) folder first."),
                 )
                 return
             folder = filedialog.askdirectory(
                 initialdir=src,
-                title="Choose folder to track (inside Source)",
+                title=tr("Choose folder to track (inside Source)"),
             )
             if not folder:
                 return
@@ -366,8 +766,8 @@ class SierraPatcherGUI(tk.Tk):
                 rel = folder.relative_to(src)
             except ValueError:
                 messagebox.showwarning(
-                    "Invalid folder",
-                    "Please choose a folder inside the Source directory.",
+                    tr("Invalid folder"),
+                    tr("Please choose a folder inside the Source directory."),
                 )
                 return
             rel_str = str(rel).replace("\\", "/")
@@ -379,16 +779,17 @@ class SierraPatcherGUI(tk.Tk):
             self.g_integrity_folders.clear()
             self._update_integrity_label()
 
-        ttk.Button(card, text="Add folder...", command=add_folder)\
+        ttk.Button(card, text=tr("Add folder..."), command=add_folder)\
             .grid(row=1, column=0, sticky="w", padx=4, pady=(0, 4))
-        ttk.Button(card, text="Clear", command=clear_folders)\
+        ttk.Button(card, text=tr("Clear"), command=clear_folders)\
             .grid(row=1, column=1, sticky="w", padx=4, pady=(0, 4))
 
         # Generate button inside Generate tab
-        ttk.Button(f, text="Generate patch package", command=self._run_generate)\
+        self.btn_generate = ttk.Button(f, text=tr("Generate patch package"), command=self._run_generate)
+        self.btn_generate\
             .grid(row=7, column=0, columnspan=3, pady=(6, 8), padx=12, sticky="w")
         self.btn_abort_gen = ttk.Button(
-            f, text="Abort", command=self._abort_generate, state="disabled"
+            f, text=tr("Abort"), command=self._abort_generate, state="disabled"
         )
         self.btn_abort_gen.grid(row=7, column=1, padx=6, pady=(6, 8), sticky="w")
         return f
@@ -414,25 +815,25 @@ class SierraPatcherGUI(tk.Tk):
         )
 
         # Small validation hint under destination
-        self._dest_hint = ttk.Label(f, text="Destination folder is required.", style="Hint.TLabel")
+        self._dest_hint = ttk.Label(f, text=tr("Destination folder is required."), style="Hint.TLabel")
         self._dest_hint.grid(row=1, column=1, sticky="w", padx=12, pady=(2, 0))
         self._dest_hint.grid_remove()  # start hidden
         self._row(f, 1, "Threads", self.i_threads)
 
-        ttk.Checkbutton(f, text="Force (bypass metadata checks)", variable=self.i_force)\
+        ttk.Checkbutton(f, text=tr("Force (bypass metadata checks)"), variable=self.i_force)\
             .grid(row=2, column=0, columnspan=2, sticky="w", padx=12)
 
         
         # Install button: highlighted, disabled until valid
-        self.btn_install = ttk.Button(f, text="Install SPT", style="AccentInstall.TButton", command=self._run_install)
+        self.btn_install = ttk.Button(f, text=tr("Install SPT"), style="AccentInstall.TButton", command=self._run_install)
         self.btn_install.state(["!disabled"])
         self.btn_install.grid(row=3, column=0, columnspan=3, pady=(8, 8), padx=12, sticky="w")
 
-        self.btn_abort_ins = ttk.Button(f, text="Abort", command=self._abort_install, state="disabled")
+        self.btn_abort_ins = ttk.Button(f, text=tr("Abort"), command=self._abort_install, state="disabled")
         self.btn_abort_ins.grid(row=3, column=1, padx=6, pady=(6,8), sticky="w")
 
         # ---- Status panel -------------------------------------------------------
-        card = ttk.LabelFrame(f, text="Status")
+        card = ttk.LabelFrame(f, text=tr("Status"))
         card.grid(row=4, column=0, columnspan=3, sticky="ew", padx=10, pady=(8, 0))
         card.columnconfigure(0, weight=1)   # System
         card.columnconfigure(1, weight=2)   # Patcher
@@ -440,10 +841,10 @@ class SierraPatcherGUI(tk.Tk):
         card.columnconfigure(3, weight=1)   # Destination
 
         # Section headers
-        ttk.Label(card, text="System", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", padx=8, pady=(8,2))
-        ttk.Label(card, text="Patcher", font=("Segoe UI", 10, "bold")).grid(row=0, column=1, sticky="w", padx=8, pady=(8,2))
-        ttk.Label(card, text="Tarkov",  font=("Segoe UI", 10, "bold")).grid(row=0, column=2, sticky="w", padx=8, pady=(8,2))
-        ttk.Label(card, text="Destination", font=("Segoe UI", 10, "bold")).grid(row=0, column=3, sticky="w", padx=8, pady=(8,2))
+        ttk.Label(card, text=tr("System"), font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", padx=8, pady=(8,2))
+        ttk.Label(card, text=tr("Patcher"), font=("Segoe UI", 10, "bold")).grid(row=0, column=1, sticky="w", padx=8, pady=(8,2))
+        ttk.Label(card, text=tr("Tarkov"),  font=("Segoe UI", 10, "bold")).grid(row=0, column=2, sticky="w", padx=8, pady=(8,2))
+        ttk.Label(card, text=tr("Destination"), font=("Segoe UI", 10, "bold")).grid(row=0, column=3, sticky="w", padx=8, pady=(8,2))
 
         # StringVars
         self._stat = {k: tk.StringVar(value="—") for k in [
@@ -474,8 +875,8 @@ class SierraPatcherGUI(tk.Tk):
         # Controls
         btns = ttk.Frame(card)
         btns.grid(row=4, column=0, columnspan=4, sticky="ew", padx=8, pady=(6,8))
-        ttk.Button(btns, text="Refresh", command=self._refresh_status).pack(side="left")
-        ttk.Button(btns, text="Open destination", command=self._open_destination).pack(side="left", padx=6)
+        ttk.Button(btns, text=tr("Refresh"), command=self._refresh_status).pack(side="left")
+        ttk.Button(btns, text=tr("Open destination"), command=self._open_destination).pack(side="left", padx=6)
 
         # Initial fill
         self._refresh_status()
@@ -502,7 +903,8 @@ class SierraPatcherGUI(tk.Tk):
         if os.path.exists(logo_path):
             try:
                 from PIL import Image, ImageTk
-                img = Image.open(logo_path).resize((96, 96))
+                with Image.open(logo_path) as source_image:
+                    img = source_image.resize((96, 96))
                 self._info_logo_img = ImageTk.PhotoImage(img)  # keep reference!
                 logo_lbl.configure(image=self._info_logo_img)
             except Exception:
@@ -533,7 +935,7 @@ class SierraPatcherGUI(tk.Tk):
 
         # Primary call-to-action buttons
         ttk.Button(
-            links, text="Patchers",
+            links, text=tr("Patchers"),
             command=lambda: open_url("https://52sierra.net/patcher/")
         ).grid(row=0, column=0, padx=(0, 8))
         ttk.Button(
@@ -541,7 +943,7 @@ class SierraPatcherGUI(tk.Tk):
             command=lambda: open_url("https://discord.gg/uKMW8PxE8s")
         ).grid(row=0, column=1, padx=(0, 8))
         ttk.Button(
-            links, text="Docs",
+            links, text=tr("Docs"),
             command=lambda: open_url("https://52sierra.net/patcher/readme.txt")
         ).grid(row=0, column=2, padx=(0, 8))
 
@@ -554,7 +956,7 @@ class SierraPatcherGUI(tk.Tk):
 
         right_links = ttk.Frame(links)
         right_links.grid(row=0, column=4, sticky="e")
-        site_l = ttk.Label(right_links, text="Homepage")
+        site_l = ttk.Label(right_links, text=tr("Homepage"))
         repo_l = ttk.Label(right_links, text="GitHub")
         site_l.grid(row=0, column=0, padx=8)
         repo_l.grid(row=0, column=1, padx=8)
@@ -568,7 +970,7 @@ class SierraPatcherGUI(tk.Tk):
         cards.columnconfigure(1, weight=1)
 
         # About card (left)
-        about = ttk.LabelFrame(cards, text="About", padding=12)
+        about = ttk.LabelFrame(cards, text=tr("About"), padding=12)
         about.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=0)
 
         try:
@@ -576,17 +978,17 @@ class SierraPatcherGUI(tk.Tk):
         except Exception:
             _VER = "0.1.0"
 
-        ttk.Label(about, text=f"Version: {_VER}", foreground="#444").grid(row=0, column=0, sticky="w")
-        ttk.Label(about, text="Sierra Installer provides patch generation/application for SPT installations.",
+        ttk.Label(about, text=tr("Version: {version}", version=_VER), foreground="#444").grid(row=0, column=0, sticky="w")
+        ttk.Label(about, text=tr("Sierra Installer provides patch generation/application for SPT installations."),
                   foreground="#555").grid(row=1, column=0, sticky="w", pady=(6, 0))
 
         # Support card (right)
-        support = ttk.LabelFrame(cards, text="Support", padding=12)
+        support = ttk.LabelFrame(cards, text=tr("Support"), padding=12)
         support.grid(row=0, column=1, sticky="nsew", padx=(8, 0), pady=0)
 
         support_email = "sierra@52sierra.net"
         row = 0
-        ttk.Label(support, text="mail address:", foreground="#444").grid(row=row, column=0, sticky="w"); row += 1
+        ttk.Label(support, text=tr("mail address:"), foreground="#444").grid(row=row, column=0, sticky="w"); row += 1
 
         # clickable email
         mail_l = ttk.Label(support, text=support_email, foreground="#0b62d6", cursor="hand2")
@@ -597,7 +999,7 @@ class SierraPatcherGUI(tk.Tk):
 
         btns = ttk.Frame(support)
         btns.grid(row=row, column=0, sticky="w", pady=(8, 0)); row += 1
-        ttk.Button(btns, text="Copy email",
+        ttk.Button(btns, text=tr("Copy email"),
                    command=lambda: copy_to_clipboard(self, support_email)).pack(side="left")
 
         # --- Footer ---
@@ -633,7 +1035,7 @@ class SierraPatcherGUI(tk.Tk):
 
     def _row(self, parent, r, label, entry_widget, browse=None, required=False):
         # label with optional red asterisk
-        lbl_text = f"{label}"
+        lbl_text = tr(f"{label}")
         lbl = ttk.Label(parent, text=lbl_text)
         lbl.grid(row=r, column=0, sticky="w", padx=12, pady=(6, 0))
         if required:
@@ -642,10 +1044,11 @@ class SierraPatcherGUI(tk.Tk):
 
         entry_widget.grid(row=r, column=1, sticky="ew", padx=12, pady=(6, 0))
         if browse:
-            ttk.Button(parent, text="Browse", command=browse).grid(row=r, column=2, padx=6, pady=(6, 0))
+            ttk.Button(parent, text=tr("Browse"), command=browse).grid(row=r, column=2, padx=6, pady=(6, 0))
+        return lbl
 
     def _browse(self, entry: ttk.Entry):
-        d = filedialog.askdirectory(title="Select folder")
+        d = filedialog.askdirectory(title=tr("Select folder"))
         if d:
             entry.delete(0, tk.END)
             entry.insert(0, d)
@@ -653,20 +1056,20 @@ class SierraPatcherGUI(tk.Tk):
     def _show_dependency_prompt(self, meta: Meta, missing) -> bool:
         result = {"continue": False}
         win = tk.Toplevel(self)
-        win.title(".NET Dependencies")
+        win.title(tr(".NET Dependencies"))
         win.resizable(False, False)
         win.transient(self)
         win.grab_set()
 
-        release = meta.title or "this patch"
+        release = meta.title or tr("this patch")
         ttk.Label(
             win,
-            text=f"{release} needs additional Microsoft .NET components.",
+            text=tr("{release} needs additional Microsoft .NET components.", release=release),
             font=("Segoe UI", 10, "bold"),
         ).grid(row=0, column=0, columnspan=4, sticky="w", padx=12, pady=(12, 4))
         ttk.Label(
             win,
-            text="Install these from Microsoft, then press Install again. You can continue if you have already installed them elsewhere.",
+            text=tr("Install these from Microsoft, then press Install again. You can continue if you have already installed them elsewhere."),
             wraplength=560,
         ).grid(row=1, column=0, columnspan=4, sticky="w", padx=12, pady=(0, 8))
 
@@ -687,10 +1090,10 @@ class SierraPatcherGUI(tk.Tk):
             result["continue"] = True
             win.destroy()
 
-        ttk.Button(win, text="Open links", command=open_all).grid(row=3, column=0, padx=(12, 6), pady=(0, 12), sticky="w")
-        ttk.Button(win, text="Copy links", command=copy_links).grid(row=3, column=1, padx=6, pady=(0, 12), sticky="w")
-        ttk.Button(win, text="Continue anyway", command=continue_install).grid(row=3, column=2, padx=6, pady=(0, 12), sticky="e")
-        ttk.Button(win, text="Cancel", command=win.destroy).grid(row=3, column=3, padx=(6, 12), pady=(0, 12), sticky="e")
+        ttk.Button(win, text=tr("Open links"), command=open_all).grid(row=3, column=0, padx=(12, 6), pady=(0, 12), sticky="w")
+        ttk.Button(win, text=tr("Copy links"), command=copy_links).grid(row=3, column=1, padx=6, pady=(0, 12), sticky="w")
+        ttk.Button(win, text=tr("Continue anyway"), command=continue_install).grid(row=3, column=2, padx=6, pady=(0, 12), sticky="e")
+        ttk.Button(win, text=tr("Cancel"), command=win.destroy).grid(row=3, column=3, padx=(6, 12), pady=(0, 12), sticky="e")
 
         win.update_idletasks()
         x = self.winfo_rootx() + max(0, (self.winfo_width() - win.winfo_width()) // 2)
@@ -708,10 +1111,16 @@ class SierraPatcherGUI(tk.Tk):
         title = self.g_title.get().strip() or ""
         date = self.g_date.get().strip() or _dt.date.today().isoformat()
         threads = int(self.g_threads.get())
-        profile_label = getattr(self, "g_diff_profile", tk.StringVar(value="Balanced")).get()
+        profile_label = canonical_choice(
+            getattr(self, "g_diff_profile", tk.StringVar(value=tr("Balanced"))).get(),
+            DIFF_PRESETS,
+        )
         diff_args = DIFF_PRESETS.get(profile_label, DIFF_PRESETS["Balanced"])
         if not src or not dst:
-            messagebox.showerror("Missing folders", "Please set Source and Target folders.")
+            messagebox.showerror(
+                tr("Missing folders"),
+                tr("Please set Source and Target folders."),
+            )
             return
         check_resources()
 
@@ -721,7 +1130,7 @@ class SierraPatcherGUI(tk.Tk):
         self._reset_prog(total_files + extra_steps, "Generating patches")
 
         def on_progress(phase, current, total, message):
-            _safe_call(self, self._detail_var.set, message)
+            _safe_call(self, self._detail_var.set, tr_progress(message))
             # keep progress determinate by mapping current → value without touching Tk from worker
             def _do():
                 self._prog_bar['value'] = min(self._total_var, self._done_var + current)
@@ -804,7 +1213,12 @@ class SierraPatcherGUI(tk.Tk):
 
                 self._set_phase("Done")
                 self._log("[generate] done")
-                _safe_call(self, messagebox.showinfo, "Generate", f"Patch package ready in:\n{final_dir}")
+                _safe_call(
+                    self,
+                    messagebox.showinfo,
+                    tr("Generate"),
+                    tr("Patch package ready in:\n{path}", path=final_dir),
+                )
 
             except proc.Cancelled:
                 self._phase_progress(1, 1, "Cancelled")
@@ -813,7 +1227,12 @@ class SierraPatcherGUI(tk.Tk):
                 if self._cancel.is_set():
                     self._set_phase("Cancelled"); self._log("[generate] cancelled during operation"); return
                 self._log_exc("[generate] failed")
-                _safe_call(self, messagebox.showerror, "Generate", "Generation failed. See Logs tab for details.")
+                _safe_call(
+                    self,
+                    messagebox.showerror,
+                    tr("Generate"),
+                    tr("Generation failed. See Logs for details."),
+                )
             finally:
                 proc.kill_all()
                 _safe_call(self, self.btn_abort_gen.state, ["disabled"])
@@ -827,14 +1246,20 @@ class SierraPatcherGUI(tk.Tk):
         threads = int(self.i_threads.get())
         force = self.i_force.get()
         if not dst:
-            messagebox.showerror("Missing folder", "Please set Destination folder.")
+            messagebox.showerror(
+                tr("Missing folder"),
+                tr("Please set Destination folder."),
+            )
             self.btn_abort_ins.state(["disabled"])
             return
         try:
             meta_for_deps = Meta.read(STORAGE_read_DIR)
             missing_deps = missing_requirements_for_metadata(meta_for_deps)
         except Exception as e:
-            messagebox.showerror("Metadata error", f"Could not read patch metadata:\n{e}")
+            messagebox.showerror(
+                tr("Metadata error"),
+                tr("Could not read patch metadata:\n{error}", error=e),
+            )
             self.btn_abort_ins.state(["disabled"])
             return
         if missing_deps and not self._show_dependency_prompt(meta_for_deps, missing_deps):
@@ -849,7 +1274,7 @@ class SierraPatcherGUI(tk.Tk):
         self._reset_prog(total_patches + extra_steps, "Applying patches")
 
         def on_progress(phase, current, total, message):
-            _safe_call(self, self._detail_var.set, message)
+            _safe_call(self, self._detail_var.set, tr_progress(message))
             # keep progress determinate by mapping current → value without touching Tk from worker
             def _do():
                 self._prog_bar['value'] = min(self._total_var, self._done_var + current)
@@ -948,7 +1373,12 @@ class SierraPatcherGUI(tk.Tk):
 
                 self._set_phase("Done")
                 self._log("[install] done")
-                _safe_call(self, messagebox.showinfo, "Install", "Patch applied successfully.")
+                _safe_call(
+                    self,
+                    messagebox.showinfo,
+                    tr("Install"),
+                    tr("Patch applied successfully."),
+                )
             except proc.Cancelled:
                 self._phase_progress(1, 1, "Cancelled")
                 self._log("[install] cancelled by user")
@@ -956,7 +1386,12 @@ class SierraPatcherGUI(tk.Tk):
                 if self._cancel.is_set():
                     self._set_phase("Cancelled"); self._log("[install] cancelled during operation"); return
                 self._log_exc("[install] failed")
-                _safe_call(self, messagebox.showerror, "Install", "Install failed. See Logs tab for details.")
+                _safe_call(
+                    self,
+                    messagebox.showerror,
+                    tr("Install"),
+                    tr("Install failed. See Logs for details."),
+                )
             finally:
                 proc.kill_all()
                 _safe_call(self, self.btn_abort_ins.state, ["disabled"])

@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from . import gui_web
+from .i18n import tr
 
 
 _ENABLED = False
@@ -11,6 +12,15 @@ _GENERATE_BUTTON_LABELS = {"Generate patch package", "Generate web release"}
 
 
 def _find_generate_button(app) -> ttk.Button | None:
+    explicit = getattr(app, "btn_generate", None)
+    if isinstance(explicit, ttk.Button):
+        try:
+            if explicit.winfo_exists():
+                app._guarded_generate_button = explicit
+                return explicit
+        except tk.TclError:
+            pass
+
     cached = getattr(app, "_guarded_generate_button", None)
     if isinstance(cached, ttk.Button):
         try:
@@ -27,7 +37,11 @@ def _find_generate_button(app) -> ttk.Button | None:
     while stack:
         widget = stack.pop()
         try:
-            if isinstance(widget, ttk.Button) and str(widget.cget("text")) in _GENERATE_BUTTON_LABELS:
+            if isinstance(widget, ttk.Button) and str(widget.cget("text")) in {
+                label
+                for english in _GENERATE_BUTTON_LABELS
+                for label in (english, tr(english))
+            }:
                 app._guarded_generate_button = widget
                 return widget
             stack.extend(widget.winfo_children())
@@ -124,8 +138,8 @@ def enable_generation_guard() -> None:
         self._generation_running = True
         _set_generate_enabled(self, False)
         try:
-            self._phase_var.set("Preparing generation")
-            self._detail_var.set("Validating resources...")
+            self._phase_var.set(tr("Preparing generation"))
+            self._detail_var.set(tr("Validating resources..."))
             self._prog_bar.configure(mode="determinate", maximum=1, value=0)
             self.update_idletasks()
         except tk.TclError:

@@ -6,6 +6,8 @@ import winreg
 from dataclasses import dataclass
 from typing import Iterable
 
+from .i18n import tr
+
 
 @dataclass(frozen=True)
 class DependencyRequirement:
@@ -322,9 +324,9 @@ def missing_requirements_for_metadata(meta) -> list[DependencyRequirement]:
 def format_missing_requirements(requirements: Iterable[DependencyRequirement]) -> str:
     lines: list[str] = []
     for req in requirements:
-        lines.append(f"{req.label}\n{req.download_url}")
+        lines.append(f"{tr(req.label)}\n{req.download_url}")
         if req.note:
-            lines.append(req.note)
+            lines.append(tr(req.note))
     return "\n\n".join(lines)
 
 

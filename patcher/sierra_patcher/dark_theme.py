@@ -62,6 +62,18 @@ def _configure_ttk_styles(root: tk.Misc) -> None:
     style.configure("TFrame", background=WINDOW_BG)
     style.configure("TLabel", background=WINDOW_BG, foreground=TEXT)
     style.configure("Hint.TLabel", background=WINDOW_BG, foreground=ERROR, font=("Segoe UI", 9))
+    style.configure("LanguageBar.TFrame", background=WINDOW_BG)
+    style.configure(
+        "AppTitle.TLabel",
+        background=WINDOW_BG,
+        foreground=TEXT,
+        font=("Segoe UI", 11, "bold"),
+    )
+    style.configure(
+        "LanguageLabel.TLabel",
+        background=WINDOW_BG,
+        foreground=SECONDARY_TEXT,
+    )
 
     style.configure(
         "TLabelframe",
@@ -92,6 +104,36 @@ def _configure_ttk_styles(root: tk.Misc) -> None:
         background=[("pressed", PANEL_BG), ("active", HOVER_BG), ("disabled", PANEL_BG)],
         foreground=[("disabled", DISABLED_TEXT)],
         bordercolor=[("focus", ACCENT), ("active", SECONDARY_TEXT)],
+    )
+
+    style.configure(
+        "Language.TButton",
+        background=PANEL_BG,
+        foreground=TEXT,
+        bordercolor=BORDER,
+        focusthickness=1,
+        focuscolor=BORDER,
+        padding=(8, 3),
+    )
+    style.map(
+        "Language.TButton",
+        background=[("pressed", PANEL_BG), ("active", HOVER_BG)],
+        bordercolor=[("focus", ACCENT), ("active", SECONDARY_TEXT)],
+    )
+    style.configure(
+        "LanguageSelected.TButton",
+        background=ACCENT,
+        foreground=ACCENT_TEXT,
+        bordercolor=ACCENT,
+        focusthickness=1,
+        focuscolor=ACCENT,
+        padding=(8, 3),
+    )
+    style.map(
+        "LanguageSelected.TButton",
+        background=[("pressed", ACCENT_PRESSED), ("active", "#9fc2fa")],
+        foreground=[("pressed", ACCENT_TEXT), ("active", ACCENT_TEXT)],
+        bordercolor=[("pressed", ACCENT_PRESSED), ("active", "#9fc2fa")],
     )
 
     style.configure(
