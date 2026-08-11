@@ -6,6 +6,7 @@
 # This spec builds the public GUI onefile executable. Package transport data
 # stays external as manifests/objects; runtime patching uses only zstd.exe.
 
+import importlib.util
 import os
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
@@ -24,11 +25,19 @@ def P(*parts):
     return os.path.join(PR, *parts)
 
 
+def _build_windows_version_info():
+    helper_path = P('windows_version_info.py')
+    spec = importlib.util.spec_from_file_location('_sierra_windows_version_info', helper_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f'could not load Windows version metadata helper: {helper_path}')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.build_version_info(PR)
+
+
 # Build metadata is generated from sierra_patcher.__version__ so the Windows
 # VERSIONINFO resource stays in sync with the application's canonical version.
-from windows_version_info import build_version_info
-
-version_info = build_version_info(PR)
+version_info = _build_windows_version_info()
 
 block_cipher = None
 
