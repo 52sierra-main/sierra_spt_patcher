@@ -4,7 +4,6 @@ import re
 import subprocess
 import winreg
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Iterable
 
 
@@ -15,6 +14,8 @@ class DependencyRequirement:
     runtime_check: str
     download_url: str
     note: str = ""
+    framework_name: str = ""
+    minimum_version: str = ""
 
 
 @dataclass(frozen=True)
@@ -30,67 +31,11 @@ _NETFX_472 = DependencyRequirement(
     download_url="https://dotnet.microsoft.com/en-us/download/dotnet-framework/net472",
 )
 
-_DESKTOP = {
-    5: DependencyRequirement(
-        key="desktop5",
-        label=".NET Desktop Runtime 5 x64",
-        runtime_check="Microsoft.WindowsDesktop.App 5.",
-        download_url="https://dotnet.microsoft.com/en-us/download/dotnet/5.0",
-    ),
-    6: DependencyRequirement(
-        key="desktop6",
-        label=".NET Desktop Runtime 6 x64",
-        runtime_check="Microsoft.WindowsDesktop.App 6.",
-        download_url="https://dotnet.microsoft.com/en-us/download/dotnet/6.0",
-    ),
-    8: DependencyRequirement(
-        key="desktop8",
-        label=".NET Desktop Runtime 8 x64",
-        runtime_check="Microsoft.WindowsDesktop.App 8.",
-        download_url="https://dotnet.microsoft.com/en-us/download/dotnet/8.0",
-    ),
-    9: DependencyRequirement(
-        key="desktop9",
-        label=".NET Desktop Runtime 9 x64",
-        runtime_check="Microsoft.WindowsDesktop.App 9.",
-        download_url="https://dotnet.microsoft.com/en-us/download/dotnet/9.0",
-    ),
-    10: DependencyRequirement(
-        key="desktop10",
-        label=".NET Desktop Runtime 10 x64",
-        runtime_check="Microsoft.WindowsDesktop.App 10.",
-        download_url="https://dotnet.microsoft.com/en-us/download/dotnet/10.0",
-        note="SPT 4.1 requirement is provisional until stable release docs are available.",
-    ),
-}
-
-_ASPNET = {
-    9: DependencyRequirement(
-        key="aspnet9",
-        label="ASP.NET Core Runtime 9 x64",
-        runtime_check="Microsoft.AspNetCore.App 9.",
-        download_url="https://dotnet.microsoft.com/en-us/download/dotnet/9.0",
-    ),
-    10: DependencyRequirement(
-        key="aspnet10",
-        label="ASP.NET Core Runtime 10 x64",
-        runtime_check="Microsoft.AspNetCore.App 10.",
-        download_url="https://dotnet.microsoft.com/en-us/download/dotnet/10.0",
-        note="SPT 4.1 requirement is provisional until stable release docs are available.",
-    ),
-}
-
-_KNOWN_REQUIREMENTS = {
-    "netfx472": _NETFX_472,
-    **{req.key: req for req in _DESKTOP.values()},
-    **{req.key: req for req in _ASPNET.values()},
-}
-
 
 def _parse_version(text: str | None) -> tuple[int, int, int] | None:
     if not text:
         return None
-    match = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", text)
+    match = re.match(r"^\s*(\d+)\.(\d+)(?:\.(\d+))?", str(text))
     if not match:
         return None
     return (
@@ -100,18 +45,90 @@ def _parse_version(text: str | None) -> tuple[int, int, int] | None:
     )
 
 
+def _download_url_for_version(version: str) -> str:
+    parsed = _parse_version(version)
+    if parsed is None:
+        return "https://dotnet.microsoft.com/en-us/download/dotnet"
+    major, minor, _patch = parsed
+    return f"https://dotnet.microsoft.com/en-us/download/dotnet/{major}.{minor}"
+
+
+def _framework_label(framework: str, version: str) -> str:
+    parsed = _parse_version(version)
+    train = f"{parsed[0]}.{parsed[1]}" if parsed else version
+    names = {
+        "Microsoft.NETCore.App": ".NET Runtime",
+        "Microsoft.AspNetCore.App": "ASP.NET Core Runtime",
+        "Microsoft.WindowsDesktop.App": ".NET Desktop Runtime",
+    }
+    friendly = names.get(framework, framework)
+    return f"{friendly} {train} x64"
+
+
+def _framework_requirement(
+    framework: str,
+    version: str,
+    *,
+    note: str = "",
+) -> DependencyRequirement:
+    parsed = _parse_version(version)
+    if parsed is None:
+        raise ValueError(f"Invalid .NET runtime version: {version!r}")
+    major, minor, patch = parsed
+    train = f"{major}.{minor}"
+    servicing_note = (
+        f"Requires {framework} {major}.{minor}.{patch} or a newer patch within the {train} runtime train."
+    )
+    if note:
+        servicing_note += f" {note}"
+    return DependencyRequirement(
+        key=f"runtime:{framework}:{train}",
+        label=_framework_label(framework, version),
+        runtime_check=f"{framework} >= {major}.{minor}.{patch} within {train}.x",
+        download_url=_download_url_for_version(version),
+        note=servicing_note,
+        framework_name=framework,
+        minimum_version=f"{major}.{minor}.{patch}",
+    )
+
+
+_DESKTOP = {
+    major: _framework_requirement("Microsoft.WindowsDesktop.App", f"{major}.0.0")
+    for major in (5, 6, 8, 9, 10)
+}
+
+_ASPNET = {
+    major: _framework_requirement("Microsoft.AspNetCore.App", f"{major}.0.0")
+    for major in (9, 10)
+}
+
+_KNOWN_REQUIREMENTS = {
+    "netfx472": _NETFX_472,
+    **{f"desktop{major}": req for major, req in _DESKTOP.items()},
+    **{f"aspnet{major}": req for major, req in _ASPNET.items()},
+}
+
+
 def _dedupe(requirements: Iterable[DependencyRequirement]) -> list[DependencyRequirement]:
-    seen: set[str] = set()
-    out: list[DependencyRequirement] = []
+    selected: dict[str, DependencyRequirement] = {}
+    order: list[str] = []
     for req in requirements:
-        if req.key in seen:
+        existing = selected.get(req.key)
+        if existing is None:
+            selected[req.key] = req
+            order.append(req.key)
             continue
-        seen.add(req.key)
-        out.append(req)
-    return out
+
+        old_version = _parse_version(existing.minimum_version)
+        new_version = _parse_version(req.minimum_version)
+        if old_version is not None and new_version is not None and new_version > old_version:
+            selected[req.key] = req
+    return [selected[key] for key in order]
 
 
 def infer_requirements_from_spt_version(version_text: str | None) -> list[DependencyRequirement]:
+    """Legacy fallback for packages that predate runtimeconfig-derived metadata."""
+
     version = _parse_version(version_text)
     if version is None:
         return []
@@ -169,7 +186,37 @@ def _requirements_from_tokens(tokens: Iterable[str]) -> list[DependencyRequireme
     return _dedupe(reqs)
 
 
+def _requirements_from_runtime_metadata(items) -> list[DependencyRequirement]:
+    if not isinstance(items, list) or not items:
+        return []
+
+    reqs: list[DependencyRequirement] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise RuntimeError("runtime_requirements contains an invalid entry")
+        framework = str(item.get("framework", "")).strip()
+        version = str(item.get("version", "")).strip()
+        if not framework or _parse_version(version) is None:
+            raise RuntimeError("runtime_requirements contains an invalid framework/version")
+        sources = item.get("sources")
+        source_note = ""
+        if isinstance(sources, list) and sources:
+            names = ", ".join(str(source) for source in sources[:3])
+            source_note = f"Declared by {names}."
+        reqs.append(_framework_requirement(framework, version, note=source_note))
+    return _dedupe(reqs)
+
+
 def requirements_for_metadata(meta) -> list[DependencyRequirement]:
+    # Current packages carry exact framework family + servicing baseline derived
+    # from the target SPT runtimeconfig files. Prefer those over all heuristics.
+    runtime_requirements = _requirements_from_runtime_metadata(
+        getattr(meta, "runtime_requirements", None)
+    )
+    if runtime_requirements:
+        return runtime_requirements
+
+    # Explicit legacy dependency declarations remain supported.
     declared = getattr(meta, "dependencies", None)
     if isinstance(declared, list):
         from_declared = _requirements_from_tokens(
@@ -183,6 +230,7 @@ def requirements_for_metadata(meta) -> list[DependencyRequirement]:
         if from_declared:
             return from_declared
 
+    # Old Sierra packages have neither field, so preserve their title-based map.
     return infer_requirements_from_spt_version(getattr(meta, "title", None))
 
 
@@ -196,8 +244,9 @@ def has_netfx472() -> bool:
         return False
 
 
-@lru_cache(maxsize=1)
 def runtimes() -> tuple[str, ...]:
+    """Return a fresh runtime inventory for every prerequisite check."""
+
     try:
         out = subprocess.check_output(
             ["dotnet", "--list-runtimes"],
@@ -210,23 +259,64 @@ def runtimes() -> tuple[str, ...]:
         return ()
 
 
-def _has_runtime(check_string: str) -> bool:
-    return any(check_string in line for line in runtimes())
+def _installed_runtime_versions(lines: Iterable[str]) -> dict[str, list[tuple[int, int, int]]]:
+    inventory: dict[str, list[tuple[int, int, int]]] = {}
+    pattern = re.compile(r"^\s*(\S+)\s+(\d+\.\d+(?:\.\d+)?(?:-[^\s]+)?)\s+\[")
+    for line in lines:
+        match = pattern.match(line)
+        if not match:
+            continue
+        framework = match.group(1)
+        version_text = match.group(2)
+        # A stable requirement should not be considered satisfied only by a
+        # prerelease runtime. SPT release packages use stable runtime baselines.
+        if "-" in version_text:
+            continue
+        version = _parse_version(version_text)
+        if version is not None:
+            inventory.setdefault(framework, []).append(version)
+    return inventory
+
+
+def _has_runtime_requirement(
+    requirement: DependencyRequirement,
+    inventory: dict[str, list[tuple[int, int, int]]],
+) -> bool:
+    required = _parse_version(requirement.minimum_version)
+    if not requirement.framework_name or required is None:
+        return any(requirement.runtime_check in line for line in runtimes())
+
+    required_major, required_minor, required_patch = required
+    for installed in inventory.get(requirement.framework_name, []):
+        major, minor, patch = installed
+        if major == required_major and minor == required_minor and patch >= required_patch:
+            return True
+    return False
 
 
 def dependency_status(requirements: Iterable[DependencyRequirement]) -> list[DependencyStatus]:
+    requirements = _dedupe(requirements)
+    runtime_lines = runtimes()
+    inventory = _installed_runtime_versions(runtime_lines)
+
     statuses: list[DependencyStatus] = []
-    for req in _dedupe(requirements):
+    for req in requirements:
         if req.key == "netfx472":
             installed = has_netfx472()
+        elif req.framework_name:
+            installed = _has_runtime_requirement(req, inventory)
         else:
-            installed = _has_runtime(req.runtime_check)
+            installed = any(req.runtime_check in line for line in runtime_lines)
         statuses.append(DependencyStatus(req, installed))
     return statuses
 
 
 def missing_requirements_for_metadata(meta) -> list[DependencyRequirement]:
-    return [status.requirement for status in dependency_status(requirements_for_metadata(meta)) if not status.installed]
+    return [
+        status.requirement
+        for status in dependency_status(requirements_for_metadata(meta))
+        if not status.installed
+    ]
 
 
 def format_missing_requirements(requirements: Iterable[DependencyRequirement]) -> str:
@@ -241,17 +331,25 @@ def format_missing_requirements(requirements: Iterable[DependencyRequirement]) -
 def ensure_prereqs(meta=None, interactive: bool = True) -> list[DependencyRequirement]:
     """Compatibility wrapper: report missing requirements, never download or install."""
 
+    del interactive
     if meta is None:
         requirements = _dedupe([_NETFX_472, _DESKTOP[5], _DESKTOP[6], _DESKTOP[8]])
     else:
         requirements = requirements_for_metadata(meta)
 
-    missing = [status.requirement for status in dependency_status(requirements) if not status.installed]
+    missing = [
+        status.requirement
+        for status in dependency_status(requirements)
+        if not status.installed
+    ]
     if not missing:
         print("All required .NET dependencies are present.")
         return []
 
     print("Missing .NET dependencies:")
     print(format_missing_requirements(missing))
-    print("Automatic dependency installation has been removed. Please install from the official Microsoft links above.")
+    print(
+        "Automatic dependency installation has been removed. "
+        "Please install from the official Microsoft links above."
+    )
     return missing
