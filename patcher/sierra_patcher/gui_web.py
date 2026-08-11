@@ -380,7 +380,7 @@ class IntegratedSierraPatcherGUI(SierraPatcherGUI):
         card.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 8))
         for column in range(4):
             card.columnconfigure(column, weight=1)
-        for column, title in enumerate(("System", "Patcher", "Tarkov", "Destination")):
+        for column, title in enumerate(("System", "Patcher", "Live Tarkov Folder", "Destination")):
             ttk.Label(card, text=title, font=("Segoe UI", 10, "bold")).grid(
                 row=0, column=column, sticky="w", padx=8, pady=(8, 2)
             )
