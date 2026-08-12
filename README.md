@@ -1,4 +1,4 @@
-# Sierra Installer
+# [Sierra Installer](https://github.com/52sierra-main/sierra_spt_patcher "Visit Github repository")
 
 **Sierra Installer** is a Windows patcher and delivery tool for installing supported versions of **SPT (Single Player Tarkov)** from a clean copy of Escape from Tarkov.
 
