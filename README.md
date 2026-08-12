@@ -21,9 +21,10 @@ For troubleshooting and a foolproof step-by-step guide, see **[USER_GUIDE.md](US
 
 ## Links
 
+- Repository: https://github.com/52sierra-main/sierra_spt_patcher
 - Website: https://52sierra.net/patcher/
 - Discord: https://discord.gg/uKMW8PxE8s
-- Personal email:sohojang320@gmail.com
+- Personal email: sohojang320@gmail.com
 
 
 > Sierra Installer is an independent community project and is not affiliated with Battlestate Games.
