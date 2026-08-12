@@ -25,4 +25,8 @@ For troubleshooting and a foolproof step-by-step guide, see **[USER_GUIDE.md](US
 - Discord: https://discord.gg/uKMW8PxE8s
 - Personal email:sohojang320@gmail.com
 
+
 > Sierra Installer is an independent community project and is not affiliated with Battlestate Games.
+
+
+© Suho Jang(a.k.a sierra) - since 2025
