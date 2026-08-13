@@ -16,6 +16,7 @@ if GUI_ENVIRONMENT:
     from tkinter import ttk
 
     from sierra_patcher import (
+        dark_theme,
         gui,
         gui_catalog,
         gui_hybrid,
@@ -153,6 +154,51 @@ class GuiLanguageSwitchTests(unittest.TestCase):
         self.assertEqual(self.app.i_dest_var.get(), destination)
         self.assertEqual(self.app.i_destination_label.cget("text"), "Destination to patch")
         self.assertFalse(self.app._live_source_frame.grid_info())
+
+    def test_install_mode_radio_hover_keeps_dark_background(self) -> None:
+        dark_theme._configure_ttk_styles(self.app)
+        style = ttk.Style(self.app)
+
+        self.assertEqual(style.lookup("TRadiobutton", "background"), dark_theme.WINDOW_BG)
+        self.assertEqual(
+            style.lookup("TRadiobutton", "background", ("active",)),
+            dark_theme.WINDOW_BG,
+        )
+        self.assertEqual(
+            style.lookup("TRadiobutton", "background", ("selected", "active")),
+            dark_theme.WINDOW_BG,
+        )
+
+    def test_empty_automatic_copy_destination_is_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            live = root / "Live"
+            destination = root / "SPT"
+            live.mkdir()
+            destination.mkdir()
+            (live / "EscapeFromTarkov.exe").touch()
+            installation = {"install_path": str(live)}
+            self.app.i_source_var.set("Web release")
+            self.app._catalog_release_details = {
+                "3.11.4": CatalogRelease("3.11.4", "1.1.0.46699")
+            }
+            self.app.i_web_release.configure(values=("choose version", "3.11.4"))
+            self.app.i_web_release_var.set("3.11.4")
+
+            with (
+                mock.patch.object(gui, "query_install", return_value=installation),
+                mock.patch.object(gui, "exe_version", return_value="1.1.0.46699"),
+                mock.patch.object(gui_layout, "query_install", return_value=installation),
+                mock.patch.object(gui_layout, "exe_version", return_value="1.1.0.46699"),
+                mock.patch.object(gui_polished, "query_install", return_value=installation),
+                mock.patch.object(gui_polished, "exe_version", return_value="1.1.0.46699"),
+            ):
+                self.app.i_dest_var.set(str(destination))
+                self.app._validate_install_ready()
+
+            self.assertEqual(self.app._destination_badge.cget("text"), "READY  ✓")
+            self.assertEqual(self.app.i_dest.cget("style"), "Ready.TEntry")
+            self.assertNotIn("disabled", self.app.btn_install.state())
 
     def test_live_folder_is_never_a_valid_destination(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -546,6 +592,8 @@ class GuiLanguageSwitchTests(unittest.TestCase):
             def copy_game(*_args, **_kwargs):
                 order.append("copy")
                 destination.mkdir()
+                (destination / "EscapeFromTarkov.exe").touch()
+                (destination / "SPT.Launcher.exe").touch()
 
             def apply_patches(*_args, **_kwargs):
                 order.append("patch")
@@ -604,13 +652,51 @@ class GuiLanguageSwitchTests(unittest.TestCase):
                 self.app.after(10, wait_for_install)
                 self.app.mainloop()
 
+                other_destination = root / "Other"
+                other_destination.mkdir()
+                (other_destination / "unrelated.txt").touch()
+                self.app.i_dest_var.set(str(other_destination))
+                self.app._validate_install_ready()
+                self.assertEqual(self.app._destination_badge.cget("text"), "INVALID")
+                self.assertIn("disabled", self.app.btn_install.state())
+
+                self.app.i_dest_var.set(str(destination))
+                self.app._validate_install_ready()
+
             self.assertFalse(self.app._install_running)
+            self.assertEqual(self.app._completed_auto_copy_destination, str(destination))
+            self.assertEqual(self.app._destination_badge.cget("text"), "READY  ✓")
+            self.assertEqual(self.app.i_dest.cget("style"), "Ready.TEntry")
+            self.assertFalse(self.app._dest_hint.grid_info())
+            self.assertIn("disabled", self.app.btn_install.state())
+            self.assertEqual(self.app._phase_var.get(), "Done")
+            self.assertEqual(self.app._detail_var.get(), "")
             self.assertEqual(order, ["package", "copy", "patch", "finalize", "storage"])
             finalize_call.assert_called_once_with(
                 str(destination),
                 str(storage / "delete_list.txt"),
             )
             self.assertEqual(apply_storage_call.call_args.args[:2], (storage, str(destination)))
+
+    def test_failed_cache_cleanup_clears_completed_detail(self) -> None:
+        self.app._cleanup_web_cache_after_success = True
+        self.app._cleanup_web_cache_root = Path("missing-cache")
+        self.app._detail_var.set("stale detail")
+
+        with (
+            mock.patch.object(
+                self.app,
+                "_clear_managed_web_cache",
+                side_effect=OSError("locked"),
+            ),
+            mock.patch.object(gui_polished.messagebox, "showwarning") as warning,
+        ):
+            self.app._set_phase("Done")
+            self.app.update()
+
+        self.assertEqual(self.app._phase_var.get(), "Done")
+        self.assertEqual(self.app._detail_var.get(), "")
+        warning.assert_called_once()
 
     def test_preflight_statuses_use_compact_display(self) -> None:
         self.assertEqual(int(self.app._dest_hint.grid_info()["columnspan"]), 3)

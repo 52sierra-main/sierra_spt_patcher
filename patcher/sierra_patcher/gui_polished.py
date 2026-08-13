@@ -489,6 +489,8 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
                             cache_root=cache_root,
                         ),
                     )
+                finally:
+                    _safe_call(self, self._detail_var.set, "")
         return super()._set_phase(phase)
 
 

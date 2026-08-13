@@ -197,6 +197,14 @@ def _configure_ttk_styles(root: tk.Misc) -> None:
         indicatorcolor=[("selected", ACCENT), ("pressed", ACCENT_PRESSED)],
     )
 
+    style.configure("TRadiobutton", background=WINDOW_BG, foreground=TEXT, indicatorcolor=INPUT_BG)
+    style.map(
+        "TRadiobutton",
+        background=[("active", WINDOW_BG)],
+        foreground=[("disabled", DISABLED_TEXT)],
+        indicatorcolor=[("selected", ACCENT), ("pressed", ACCENT_PRESSED)],
+    )
+
     style.configure("TNotebook", background=WINDOW_BG, bordercolor=BORDER, tabmargins=(4, 4, 4, 0))
     style.configure(
         "TNotebook.Tab",

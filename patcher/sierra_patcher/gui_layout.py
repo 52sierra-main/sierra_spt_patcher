@@ -20,6 +20,7 @@ class LayoutSierraPatcherGUI(PolishedSierraPatcherGUI):
     _AUTO_DEST_PLACEHOLDER = "Select new SPT folder"
 
     def _build_install_tab(self, nb) -> ttk.Frame:
+        self._completed_auto_copy_destination: str | None = None
         root = super()._build_install_tab(nb)
         source_frame = self.i_web_release.master
 
@@ -393,7 +394,33 @@ class LayoutSierraPatcherGUI(PolishedSierraPatcherGUI):
             )
             self._dest_hint.grid()
             self.btn_install.state(["disabled"])
+
+        completed_destination = getattr(self, "_completed_auto_copy_destination", None)
+        if (
+            self._automatic_copy_enabled()
+            and destination
+            and destination == completed_destination
+            and Path(destination).is_dir()
+        ):
+            self._set_badge(self._destination_badge, True)
+            try:
+                self.i_dest.configure(style="Ready.TEntry")
+            except tk.TclError:
+                pass
+            self._dest_hint.grid_remove()
+            self.btn_install.state(["disabled"])
         return result
+
+    def _finish_install_run(self) -> None:
+        if (
+            getattr(self, "_install_running", False)
+            and self._automatic_copy_enabled()
+            and self._phase_var.get() == tr("Done")
+        ):
+            destination = self._destination_value()
+            if destination:
+                self._completed_auto_copy_destination = destination
+        return super()._finish_install_run()
 
     def _refresh_status(self):
         result = super()._refresh_status()
