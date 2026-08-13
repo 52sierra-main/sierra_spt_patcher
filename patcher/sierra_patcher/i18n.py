@@ -57,6 +57,7 @@ _KO = {
     "SOURCE MISMATCH  ⚠": "원본 불일치  ⚠",
     "VERSION UNKNOWN  ⚠": "버전 확인 불가  ⚠",
     "UNVERIFIED  ⚠": "미확인  ⚠",
+    "CHECKING...": "확인 중...",
     "Not found": "찾을 수 없음",
     "not found": "찾을 수 없음",
     "error": "오류",
@@ -117,6 +118,7 @@ _KO = {
         "타르코프 버전을 확인할 수 없어요. 본섭: {live} · 대상: {destination} · 필요: {required}",
     "This release does not provide pre-download version information. Compatibility will be checked after download.":
         "이 릴리스에는 다운로드 전 버전 정보가 없어요. 다운로드 후 호환성을 검사해요.",
+    "Checking release compatibility...": "릴리스 호환성을 확인하고 있어요...",
     "Advanced ▸": "고급 설정 ▸",
     "Advanced ▾": "고급 설정 ▾",
     "Select web package cache": "웹 패키지 캐시 폴더 선택",

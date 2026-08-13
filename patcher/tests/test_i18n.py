@@ -77,6 +77,7 @@ class I18nTests(unittest.TestCase):
     def test_version_preflight_messages_are_localized(self) -> None:
         i18n.set_language("ko")
         self.assertEqual(i18n.tr("UPDATE REQUIRED  ⚠"), "업데이트 필요  ⚠")
+        self.assertEqual(i18n.tr("CHECKING..."), "확인 중...")
         self.assertEqual(
             i18n.tr(
                 "Official Live Tarkov must be updated. Current: {current} · Required: {required}",

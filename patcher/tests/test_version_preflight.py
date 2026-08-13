@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from sierra_patcher.version_preflight import (
+    VersionPreflightResult,
     VersionPreflightStatus,
     compare_numeric_versions,
     evaluate_version_preflight,
@@ -10,6 +11,15 @@ from sierra_patcher.version_preflight import (
 
 
 class VersionPreflightTests(unittest.TestCase):
+    def test_version_checking_temporarily_blocks_download(self) -> None:
+        result = VersionPreflightResult(
+            VersionPreflightStatus.VERSION_CHECKING,
+            None,
+            None,
+            None,
+        )
+        self.assertTrue(result.blocks_download)
+
     def test_compares_dotted_numeric_versions(self) -> None:
         self.assertEqual(compare_numeric_versions("1.1.0.46657", "1.1.0.46699"), -1)
         self.assertEqual(compare_numeric_versions("1.1.0.46710", "1.1.0.46699"), 1)

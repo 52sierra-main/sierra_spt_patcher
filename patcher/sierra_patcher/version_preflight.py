@@ -6,6 +6,7 @@ from enum import Enum
 
 class VersionPreflightStatus(str, Enum):
     READY = "ready"
+    VERSION_CHECKING = "version_checking"
     UPDATE_REQUIRED = "update_required"
     PATCH_UPDATE_REQUIRED = "patch_update_required"
     SOURCE_MISMATCH = "source_mismatch"
@@ -14,6 +15,7 @@ class VersionPreflightStatus(str, Enum):
 
 
 _BLOCKING_STATUSES = {
+    VersionPreflightStatus.VERSION_CHECKING,
     VersionPreflightStatus.UPDATE_REQUIRED,
     VersionPreflightStatus.PATCH_UPDATE_REQUIRED,
     VersionPreflightStatus.SOURCE_MISMATCH,

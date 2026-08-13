@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -268,6 +269,40 @@ class GuiLanguageSwitchTests(unittest.TestCase):
                     self.app._destination_badge.cget("text"),
                     "업데이트 필요  ⚠",
                 )
+
+    def test_legacy_catalog_release_is_probed_automatically(self) -> None:
+        self.app._catalog_release_details = {
+            "3.11.4": CatalogRelease("3.11.4")
+        }
+        self.app.i_web_release.configure(values=("choose version", "3.11.4"))
+        self.app.i_web_release_var.set("3.11.4")
+
+        with mock.patch.object(
+            gui_catalog,
+            "probe_release_live_version",
+            return_value="1.1.0.46699",
+        ) as probe:
+            self.app._on_release_selected()
+            deadline = time.monotonic() + 2
+
+            def wait_for_probe():
+                if (
+                    not self.app._selected_release_probe_loading()
+                    or time.monotonic() >= deadline
+                ):
+                    self.app.quit()
+                else:
+                    self.app.after(10, wait_for_probe)
+
+            self.app.after(10, wait_for_probe)
+            self.app.mainloop()
+
+        probe.assert_called_once()
+        self.assertFalse(self.app._selected_release_probe_loading())
+        self.assertEqual(
+            self.app._selected_required_live_version(),
+            "1.1.0.46699",
+        )
 
 
 if __name__ == "__main__":

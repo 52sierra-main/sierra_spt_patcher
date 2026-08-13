@@ -192,6 +192,13 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
             return None
 
         required_version = self._selected_required_live_version()
+        if self._selected_release_probe_loading():
+            return VersionPreflightResult(
+                VersionPreflightStatus.VERSION_CHECKING,
+                None,
+                None,
+                None,
+            )
         if not required_version:
             return evaluate_version_preflight(None, None, None)
 
@@ -256,6 +263,8 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
             return tr(
                 "This release does not provide pre-download version information. Compatibility will be checked after download."
             )
+        if result.status == VersionPreflightStatus.VERSION_CHECKING:
+            return tr("Checking release compatibility...")
         return ""
 
     def _apply_version_preflight(self, result: VersionPreflightResult | None) -> None:
@@ -265,7 +274,15 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
             self._dest_hint.grid_remove()
             return
 
-        if result.status == VersionPreflightStatus.CATALOG_UNVERIFIED:
+        if result.status == VersionPreflightStatus.VERSION_CHECKING:
+            self._destination_badge.configure(
+                text=tr("CHECKING..."),
+                bg=self._UNKNOWN_BG,
+                fg=self._UNKNOWN_FG,
+            )
+            entry_style = "Unknown.TEntry"
+            hint_color = self._UNKNOWN_FG
+        elif result.status == VersionPreflightStatus.CATALOG_UNVERIFIED:
             self._destination_badge.configure(
                 text=tr("UNVERIFIED  ⚠"),
                 bg=self._UNKNOWN_BG,
@@ -346,7 +363,9 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
         force = bool(self.i_force.get())
         if getattr(self, "_install_running", False):
             self.btn_install.state(["disabled"])
-        elif preflight is not None and preflight.blocks_download and not force:
+        elif preflight is not None and preflight.blocks_download and (
+            preflight.status == VersionPreflightStatus.VERSION_CHECKING or not force
+        ):
             self.btn_install.state(["disabled"])
         return result
 
@@ -364,6 +383,13 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
     def _run_install(self):
         preflight = self._version_preflight()
         force = bool(self.i_force.get())
+        if preflight is not None and preflight.status == VersionPreflightStatus.VERSION_CHECKING:
+            messagebox.showwarning(
+                tr("Compatibility check"),
+                self._preflight_hint(preflight),
+            )
+            self._validate_install_ready()
+            return
         if preflight is not None and preflight.blocks_download and not force:
             self._log(
                 f"[preflight] stopped before download: {preflight.status.value} "

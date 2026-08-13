@@ -9,7 +9,8 @@ from . import gui_web
 from .gui_web import IntegratedSierraPatcherGUI
 from .i18n import canonical_choice, tr
 from .metadata import Meta
-from .paths import STORAGE_read_DIR
+from .paths import STORAGE_read_DIR, WORKING_DIR
+from .release_metadata_probe import probe_release_live_version
 from .web_catalog import (
     CATALOG_PLACEHOLDER,
     CatalogRelease,
@@ -47,7 +48,7 @@ class CatalogSierraPatcherGUI(IntegratedSierraPatcherGUI):
         self.i_web_release.grid(row=1, column=1, sticky="ew", padx=12, pady=(6, 0))
         self.i_web_release.bind(
             "<<ComboboxSelected>>",
-            lambda _event: (self._validate_install_ready(), self._refresh_status()),
+            self._on_release_selected,
         )
 
         # Match the destination field's required marker.
@@ -85,6 +86,8 @@ class CatalogSierraPatcherGUI(IntegratedSierraPatcherGUI):
         self._catalog_loaded = False
         self._catalog_error: str | None = None
         self._catalog_release_details: dict[str, CatalogRelease] = {}
+        self._release_probe_loading: set[str] = set()
+        self._release_probe_checked: set[str] = set()
         self._toggle_install_web_options()
         if canonical_choice(self.i_source_var.get(), gui_web.PACKAGE_SOURCES) == "Web release":
             self._load_release_catalog_async()
@@ -137,6 +140,8 @@ class CatalogSierraPatcherGUI(IntegratedSierraPatcherGUI):
                 self._catalog_release_details = {
                     release.id: release for release in release_details
                 }
+                self._release_probe_loading.clear()
+                self._release_probe_checked.clear()
 
                 release_ids = tuple(release.id for release in release_details)
                 values = (tr(CATALOG_PLACEHOLDER), *release_ids)
@@ -163,6 +168,57 @@ class CatalogSierraPatcherGUI(IntegratedSierraPatcherGUI):
             self.after(0, finish)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _on_release_selected(self, _event=None) -> None:
+        self._probe_selected_release_async()
+        self._validate_install_ready()
+        self._refresh_status()
+
+    def _probe_selected_release_async(self) -> None:
+        release = self._selected_catalog_release()
+        if (
+            release is None
+            or release.required_live_version
+            or release.id in self._release_probe_loading
+            or release.id in self._release_probe_checked
+        ):
+            return
+
+        release_id = release.id
+        cache_text = self.i_web_cache.get().strip()
+        cache_root = Path(cache_text or (Path(WORKING_DIR) / "web_cache"))
+        self._release_probe_loading.add(release_id)
+        self._log(f"[preflight] checking release metadata: {release_id}")
+
+        def worker():
+            try:
+                version = probe_release_live_version(release_id, cache_root)
+                error = None
+            except Exception as exc:
+                version = None
+                error = str(exc)
+
+            def finish():
+                self._release_probe_loading.discard(release_id)
+                self._release_probe_checked.add(release_id)
+                if version:
+                    self._catalog_release_details[release_id] = CatalogRelease(
+                        release_id,
+                        version,
+                    )
+                    self._log(f"[preflight] release metadata ready: {release_id} ({version})")
+                else:
+                    self._log(f"[preflight] release metadata unavailable: {release_id} ({error})")
+                self._validate_install_ready()
+                self._refresh_status()
+
+            self.after(0, finish)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _selected_release_probe_loading(self) -> bool:
+        release = self._selected_catalog_release()
+        return bool(release and release.id in self._release_probe_loading)
 
     def _selected_catalog_release(self) -> CatalogRelease | None:
         if not hasattr(self, "_catalog_release_details"):
