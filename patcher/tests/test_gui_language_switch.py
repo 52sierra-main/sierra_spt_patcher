@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -12,7 +14,8 @@ if GUI_ENVIRONMENT:
     import tkinter as tk
     from tkinter import ttk
 
-    from sierra_patcher import gui, gui_catalog, gui_repository, i18n
+    from sierra_patcher import gui, gui_catalog, gui_polished, gui_repository, i18n
+    from sierra_patcher.web_catalog import CatalogRelease
 
 
 @unittest.skipUnless(GUI_ENVIRONMENT, "a graphical Tk environment is required")
@@ -195,6 +198,76 @@ class GuiLanguageSwitchTests(unittest.TestCase):
             "LanguageSelected.TButton",
         )
         warning.assert_called_once()
+
+    def test_version_mismatch_is_red_localized_and_stops_before_download(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            live = root / "live"
+            destination = root / "destination"
+            live.mkdir()
+            destination.mkdir()
+            (live / "EscapeFromTarkov.exe").touch()
+            (destination / "EscapeFromTarkov.exe").touch()
+
+            self.app.i_source_var.set("Web release")
+            self.app._catalog_release_details = {
+                "3.11.4": CatalogRelease("3.11.4", "1.1.0.46699")
+            }
+            self.app.i_web_release.configure(values=("choose version", "3.11.4"))
+            self.app.i_web_release_var.set("3.11.4")
+            self.app.i_dest_var.set(str(destination))
+
+            installation = {"install_path": str(live)}
+            with (
+                mock.patch.object(gui, "query_install", return_value=installation),
+                mock.patch.object(gui, "exe_version", return_value="1.1.0.46657"),
+                mock.patch.object(gui_polished, "query_install", return_value=installation),
+                mock.patch.object(
+                    gui_polished,
+                    "exe_version",
+                    return_value="1.1.0.46657",
+                ),
+            ):
+                self.app._validate_install_ready()
+
+                self.assertEqual(
+                    self.app._destination_badge.cget("text"),
+                    "UPDATE REQUIRED  ⚠",
+                )
+                self.assertEqual(
+                    self.app._destination_badge.cget("bg"),
+                    self.app._WARNING_BG,
+                )
+                self.assertIn("disabled", self.app.btn_install.state())
+                self.assertIn("Current: 1.1.0.46657", self.app._dest_hint.cget("text"))
+
+                with (
+                    mock.patch.object(gui_polished.messagebox, "showwarning") as warning,
+                    mock.patch.object(
+                        gui_catalog.CatalogSierraPatcherGUI,
+                        "_run_install",
+                    ) as download,
+                ):
+                    gui_polished.PolishedSierraPatcherGUI._run_install(self.app)
+
+                warning.assert_called_once()
+                download.assert_not_called()
+
+                self.app._change_language("ko")
+                self.app.update()
+
+                self.assertEqual(
+                    self.app._destination_badge.cget("text"),
+                    "업데이트 필요  ⚠",
+                )
+                self.assertIn("본섭 타르코프를 업데이트해야 해요", self.app._dest_hint.cget("text"))
+
+                self.app.i_force.set(True)
+                self.assertNotIn("disabled", self.app.btn_install.state())
+                self.assertEqual(
+                    self.app._destination_badge.cget("text"),
+                    "업데이트 필요  ⚠",
+                )
 
 
 if __name__ == "__main__":

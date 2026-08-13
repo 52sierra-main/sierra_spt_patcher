@@ -52,6 +52,11 @@ _KO = {
     "Folder does not exist.": "폴더가 존재하지 않습니다.",
     "REQUIRED": "필수",
     "READY  ✓": "준비됨  ✓",
+    "UPDATE REQUIRED  ⚠": "업데이트 필요  ⚠",
+    "PATCH UPDATE NEEDED  ⚠": "패치 업데이트 필요  ⚠",
+    "SOURCE MISMATCH  ⚠": "원본 불일치  ⚠",
+    "VERSION UNKNOWN  ⚠": "버전 확인 불가  ⚠",
+    "UNVERIFIED  ⚠": "미확인  ⚠",
     "Not found": "찾을 수 없음",
     "not found": "찾을 수 없음",
     "error": "오류",
@@ -102,6 +107,16 @@ _KO = {
     "Choose version": "버전을 선택하십시오",
     "choose version": "버전 선택",
     "Not prepared": "준비되지 않음",
+    "Official Live Tarkov must be updated. Current: {current} · Required: {required}":
+        "본섭 타르코프를 업데이트해야 해요. 현재: {current} · 필요: {required}",
+    "This release does not support the current Live Tarkov version yet. Current: {current} · Supported: {required}":
+        "현재 본섭 타르코프 버전은 이 릴리스에서 아직 지원하지 않아요. 현재: {current} · 지원: {required}",
+    "The selected folder is not a fresh copy of the required Live Tarkov version. Destination: {destination} · Required: {required}":
+        "선택한 폴더가 필요한 본섭 타르코프 버전의 새 복사본이 아니에요. 대상: {destination} · 필요: {required}",
+    "Could not read the Tarkov version. Official Live: {live} · Destination: {destination} · Required: {required}":
+        "타르코프 버전을 확인할 수 없어요. 본섭: {live} · 대상: {destination} · 필요: {required}",
+    "This release does not provide pre-download version information. Compatibility will be checked after download.":
+        "이 릴리스에는 다운로드 전 버전 정보가 없어요. 다운로드 후 호환성을 검사해요.",
     "Advanced ▸": "고급 설정 ▸",
     "Advanced ▾": "고급 설정 ▾",
     "Select web package cache": "웹 패키지 캐시 폴더 선택",
@@ -154,6 +169,8 @@ _KO = {
     "Install failed. See Logs for details.": "설치 실패. 자세한 내용은 로그를 확인해 주세요.",
     "Patch package ready in:\n{path}": "패치 패키지가 준비완료:\n{path}",
     "Version mismatch": "버전 불일치",
+    "Compatibility check": "호환성 확인",
+    "No patch data was downloaded.": "패치 데이터는 다운로드하지 않았어요.",
     "Version mismatch detected.\n\nLive client: {live_version}\nExpected: {expected_version}\n\nIf your live version exceeds that of the patch, please wait for an update. Otherwise, please update your live game and try again.":
         "버전이 일치하지 않음.\n\n라이브 클라이언트: {live_version}\n필요한 버전: {expected_version}\n\n올바른 폴더를 선택하십시오. 본섭이 버전이 높다면 패치 업데이트를 기다리시고 본섭 버전이 낮다면 본섭 업데이트 후 다시 설치 과정을 시도하세요.",
     "Folder contents mismatch": "폴더 내용 불일치",

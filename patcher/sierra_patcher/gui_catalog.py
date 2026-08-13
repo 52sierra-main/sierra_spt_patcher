@@ -10,7 +10,11 @@ from .gui_web import IntegratedSierraPatcherGUI
 from .i18n import canonical_choice, tr
 from .metadata import Meta
 from .paths import STORAGE_read_DIR
-from .web_catalog import CATALOG_PLACEHOLDER, fetch_release_catalog
+from .web_catalog import (
+    CATALOG_PLACEHOLDER,
+    CatalogRelease,
+    fetch_release_catalog_details,
+)
 
 
 class CatalogSierraPatcherGUI(IntegratedSierraPatcherGUI):
@@ -80,6 +84,7 @@ class CatalogSierraPatcherGUI(IntegratedSierraPatcherGUI):
         self._catalog_loading = False
         self._catalog_loaded = False
         self._catalog_error: str | None = None
+        self._catalog_release_details: dict[str, CatalogRelease] = {}
         self._toggle_install_web_options()
         if canonical_choice(self.i_source_var.get(), gui_web.PACKAGE_SOURCES) == "Web release":
             self._load_release_catalog_async()
@@ -111,6 +116,7 @@ class CatalogSierraPatcherGUI(IntegratedSierraPatcherGUI):
 
         self._catalog_loading = True
         self._catalog_error = None
+        self._catalog_release_details = {}
         self.i_web_release_var.set(tr(CATALOG_PLACEHOLDER))
         self.i_web_release.configure(values=(tr(CATALOG_PLACEHOLDER),))
         self._release_hint.configure(text=tr("Loading available versions..."))
@@ -118,18 +124,22 @@ class CatalogSierraPatcherGUI(IntegratedSierraPatcherGUI):
 
         def worker():
             try:
-                releases = fetch_release_catalog()
+                release_details = fetch_release_catalog_details()
                 error = None
             except Exception as exc:
-                releases = []
+                release_details = []
                 error = str(exc)
 
             def finish():
                 self._catalog_loading = False
                 self._catalog_loaded = error is None
                 self._catalog_error = error
+                self._catalog_release_details = {
+                    release.id: release for release in release_details
+                }
 
-                values = (tr(CATALOG_PLACEHOLDER), *releases)
+                release_ids = tuple(release.id for release in release_details)
+                values = (tr(CATALOG_PLACEHOLDER), *release_ids)
                 self.i_web_release.configure(values=values)
                 self.i_web_release_var.set(tr(CATALOG_PLACEHOLDER))
 
@@ -138,12 +148,12 @@ class CatalogSierraPatcherGUI(IntegratedSierraPatcherGUI):
                         text=tr("Could not load versions. Check repository catalog.json.")
                     )
                     self._log(f"[catalog] load failed: {error}")
-                elif not releases:
+                elif not release_details:
                     self._release_hint.configure(text=tr("No web releases are currently listed."))
                     self._log("[catalog] loaded: no releases")
                 else:
                     self._release_hint.configure(text=tr("Version selection is required."))
-                    self._log(f"[catalog] loaded {len(releases)} release(s)")
+                    self._log(f"[catalog] loaded {len(release_details)} release(s)")
 
                 if canonical_choice(self.i_source_var.get(), gui_web.PACKAGE_SOURCES) != "Web release":
                     self._release_hint.grid_remove()
@@ -153,6 +163,16 @@ class CatalogSierraPatcherGUI(IntegratedSierraPatcherGUI):
             self.after(0, finish)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _selected_catalog_release(self) -> CatalogRelease | None:
+        if not hasattr(self, "_catalog_release_details"):
+            return None
+        release_id = self.i_web_release_var.get().strip()
+        return self._catalog_release_details.get(release_id)
+
+    def _selected_required_live_version(self) -> str | None:
+        release = self._selected_catalog_release()
+        return release.required_live_version if release is not None else None
 
     def _validate_install_ready(self):
         # Parent __init__ can call this before the catalog widgets exist.
@@ -214,7 +234,11 @@ class CatalogSierraPatcherGUI(IntegratedSierraPatcherGUI):
             self._stat["pat_title"].set(tr("Choose version"))
             self._stat["pat_patches"].set(tr("Not prepared"))
             return
-        super()._refresh_status()
+        result = super()._refresh_status()
+        selected = self._selected_catalog_release()
+        if selected is not None and selected.required_live_version:
+            self._stat["pat_version"].set(selected.required_live_version)
+        return result
 
     def _run_install(self):
         if (

@@ -74,6 +74,22 @@ class I18nTests(unittest.TestCase):
             "웹 릴리스: 4.0.1",
         )
 
+    def test_version_preflight_messages_are_localized(self) -> None:
+        i18n.set_language("ko")
+        self.assertEqual(i18n.tr("UPDATE REQUIRED  ⚠"), "업데이트 필요  ⚠")
+        self.assertEqual(
+            i18n.tr(
+                "Official Live Tarkov must be updated. Current: {current} · Required: {required}",
+                current="1.1.0.46657",
+                required="1.1.0.46699",
+            ),
+            "본섭 타르코프를 업데이트해야 해요. 현재: 1.1.0.46657 · 필요: 1.1.0.46699",
+        )
+        self.assertEqual(
+            i18n.tr("No patch data was downloaded."),
+            "패치 데이터는 다운로드하지 않았어요.",
+        )
+
     def test_localized_choices_round_trip_to_internal_value(self) -> None:
         choices = ("Web release", "Archived snapshot")
         i18n.set_language("ko")

@@ -17,6 +17,12 @@ from .gui import _hide_console_on_windows, _safe_call
 from .gui_catalog import CatalogSierraPatcherGUI
 from .i18n import canonical_choice, tr
 from .paths import WORKING_DIR
+from .registry import exe_version, query_install
+from .version_preflight import (
+    VersionPreflightResult,
+    VersionPreflightStatus,
+    evaluate_version_preflight,
+)
 from .web_catalog import CATALOG_PLACEHOLDER
 from .web_download import _io_path
 
@@ -53,6 +59,10 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
     _REQUIRED_FG = "#7a4d00"
     _READY_BG = "#e6f4ea"
     _READY_FG = "#216e39"
+    _WARNING_BG = "#fde7e9"
+    _WARNING_FG = "#b42318"
+    _UNKNOWN_BG = "#eef0f2"
+    _UNKNOWN_FG = "#475467"
     _MANAGED_CACHE_DIRS = ("objects", "packages", "manifests")
 
     def _refresh_status(self):
@@ -67,9 +77,11 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
         original_probe = base_gui.cpuinfo.get_cpu_info
         base_gui.cpuinfo.get_cpu_info = _native_cpu_info
         try:
-            return super()._refresh_status()
+            result = super()._refresh_status()
         finally:
             base_gui.cpuinfo.get_cpu_info = original_probe
+        self._update_required_field_emphasis()
+        return result
 
     def _build_install_tab(self, nb) -> ttk.Frame:
         root = super()._build_install_tab(nb)
@@ -121,6 +133,8 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
         style = ttk.Style(self)
         style.configure("Required.TEntry", fieldbackground="#fff8dc")
         style.configure("Ready.TEntry", fieldbackground="#f1fbf3")
+        style.configure("Warning.TEntry", fieldbackground="#fff1f2")
+        style.configure("Unknown.TEntry", fieldbackground="#f5f6f7")
         style.configure("Required.TCombobox", fieldbackground="#fff8dc")
         style.configure("Ready.TCombobox", fieldbackground="#f1fbf3")
         style.map(
@@ -136,6 +150,8 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
             selectforeground=[("readonly", "#000000")],
         )
 
+        self._dest_hint.configure(wraplength=420)
+        self.i_force.trace_add("write", lambda *_: self._validate_install_ready())
         self._update_required_field_emphasis()
         return root
 
@@ -153,17 +169,151 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
                 fg=self._REQUIRED_FG,
             )
 
-    def _update_required_field_emphasis(self) -> None:
-        if not hasattr(self, "_destination_badge"):
+    def _destination_for_preflight(self) -> str:
+        destination_reader = getattr(self, "_destination_value", None)
+        if callable(destination_reader):
+            return destination_reader()
+        return (self.i_dest_var.get() or "").strip()
+
+    def _version_preflight(self) -> VersionPreflightResult | None:
+        if canonical_choice(self.i_source_var.get(), gui_web.PACKAGE_SOURCES) != "Web release":
+            return None
+
+        release_id = self.i_web_release_var.get().strip()
+        if (
+            not release_id
+            or canonical_choice(release_id, (CATALOG_PLACEHOLDER,)) == CATALOG_PLACEHOLDER
+            or release_id not in tuple(self.i_web_release.cget("values"))
+        ):
+            return None
+
+        destination = self._destination_for_preflight()
+        if not destination or not Path(destination).is_dir():
+            return None
+
+        required_version = self._selected_required_live_version()
+        if not required_version:
+            return evaluate_version_preflight(None, None, None)
+
+        live_version = None
+        try:
+            installation = query_install()
+            if installation:
+                live_executable = Path(installation["install_path"]) / "EscapeFromTarkov.exe"
+                live_version = exe_version(live_executable)
+        except Exception:
+            pass
+
+        destination_version = None
+        try:
+            destination_executable = Path(destination) / "EscapeFromTarkov.exe"
+            if destination_executable.is_file():
+                destination_version = exe_version(destination_executable)
+        except Exception:
+            pass
+
+        return evaluate_version_preflight(
+            required_version,
+            live_version,
+            destination_version,
+        )
+
+    @staticmethod
+    def _shown_version(value: str | None) -> str:
+        return value or "—"
+
+    def _preflight_hint(self, result: VersionPreflightResult) -> str:
+        required = self._shown_version(result.required_version)
+        live = self._shown_version(result.live_version)
+        destination = self._shown_version(result.destination_version)
+
+        if result.status == VersionPreflightStatus.UPDATE_REQUIRED:
+            return tr(
+                "Official Live Tarkov must be updated. Current: {current} · Required: {required}",
+                current=live,
+                required=required,
+            )
+        if result.status == VersionPreflightStatus.PATCH_UPDATE_REQUIRED:
+            return tr(
+                "This release does not support the current Live Tarkov version yet. Current: {current} · Supported: {required}",
+                current=live,
+                required=required,
+            )
+        if result.status == VersionPreflightStatus.SOURCE_MISMATCH:
+            return tr(
+                "The selected folder is not a fresh copy of the required Live Tarkov version. Destination: {destination} · Required: {required}",
+                destination=destination,
+                required=required,
+            )
+        if result.status == VersionPreflightStatus.VERSION_UNKNOWN:
+            return tr(
+                "Could not read the Tarkov version. Official Live: {live} · Destination: {destination} · Required: {required}",
+                live=live,
+                destination=destination,
+                required=required,
+            )
+        if result.status == VersionPreflightStatus.CATALOG_UNVERIFIED:
+            return tr(
+                "This release does not provide pre-download version information. Compatibility will be checked after download."
+            )
+        return ""
+
+    def _apply_version_preflight(self, result: VersionPreflightResult | None) -> None:
+        if result is None:
+            return
+        if result.status == VersionPreflightStatus.READY:
+            self._dest_hint.grid_remove()
             return
 
-        destination = (self.i_dest_var.get() or "").strip()
+        if result.status == VersionPreflightStatus.CATALOG_UNVERIFIED:
+            self._destination_badge.configure(
+                text=tr("UNVERIFIED  ⚠"),
+                bg=self._UNKNOWN_BG,
+                fg=self._UNKNOWN_FG,
+            )
+            entry_style = "Unknown.TEntry"
+            hint_color = self._UNKNOWN_FG
+        else:
+            badge_text = {
+                VersionPreflightStatus.UPDATE_REQUIRED: "UPDATE REQUIRED  ⚠",
+                VersionPreflightStatus.PATCH_UPDATE_REQUIRED: "PATCH UPDATE NEEDED  ⚠",
+                VersionPreflightStatus.SOURCE_MISMATCH: "SOURCE MISMATCH  ⚠",
+                VersionPreflightStatus.VERSION_UNKNOWN: "VERSION UNKNOWN  ⚠",
+            }[result.status]
+            self._destination_badge.configure(
+                text=tr(badge_text),
+                bg=self._WARNING_BG,
+                fg=self._WARNING_FG,
+            )
+            entry_style = "Warning.TEntry"
+            hint_color = self._WARNING_FG
+
+        try:
+            self.i_dest.configure(style=entry_style)
+        except tk.TclError:
+            pass
+        self._dest_hint.configure(
+            text=self._preflight_hint(result),
+            foreground=hint_color,
+        )
+        self._dest_hint.grid()
+
+    def _update_required_field_emphasis(self) -> VersionPreflightResult | None:
+        if not hasattr(self, "_destination_badge"):
+            return None
+
+        destination = self._destination_for_preflight()
         destination_ready = bool(destination and Path(destination).is_dir())
         self._set_badge(self._destination_badge, destination_ready)
+        if not destination_ready:
+            self._dest_hint.configure(foreground=self._REQUIRED_FG)
         try:
             self.i_dest.configure(style="Ready.TEntry" if destination_ready else "Required.TEntry")
         except tk.TclError:
             pass
+
+        preflight = self._version_preflight()
+        self._apply_version_preflight(preflight)
 
         web_mode = canonical_choice(self.i_source_var.get(), gui_web.PACKAGE_SOURCES) == "Web release"
         if not web_mode:
@@ -172,7 +322,7 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
                 self.i_web_release.configure(style="TCombobox")
             except tk.TclError:
                 pass
-            return
+            return preflight
 
         self._release_badge.grid()
         release = self.i_web_release_var.get().strip()
@@ -188,10 +338,16 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
             )
         except tk.TclError:
             pass
+        return preflight
 
     def _validate_install_ready(self):
         result = super()._validate_install_ready()
-        self._update_required_field_emphasis()
+        preflight = self._update_required_field_emphasis()
+        force = bool(self.i_force.get())
+        if getattr(self, "_install_running", False):
+            self.btn_install.state(["disabled"])
+        elif preflight is not None and preflight.blocks_download and not force:
+            self.btn_install.state(["disabled"])
         return result
 
     def _toggle_install_web_options(self):
@@ -206,6 +362,26 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
         return super()._run_generate()
 
     def _run_install(self):
+        preflight = self._version_preflight()
+        force = bool(self.i_force.get())
+        if preflight is not None and preflight.blocks_download and not force:
+            self._log(
+                f"[preflight] stopped before download: {preflight.status.value} "
+                f"(live={preflight.live_version or '-'}, "
+                f"destination={preflight.destination_version or '-'}, "
+                f"required={preflight.required_version or '-'})"
+            )
+            messagebox.showwarning(
+                tr("Compatibility check"),
+                self._preflight_hint(preflight)
+                + "\n\n"
+                + tr("No patch data was downloaded."),
+            )
+            self._validate_install_ready()
+            return
+        if preflight is not None and preflight.blocks_download and force:
+            self._log(f"[preflight] {preflight.status.value} bypassed by Force")
+
         self._cleanup_web_cache_after_success = (
             canonical_choice(self.i_source_var.get(), gui_web.PACKAGE_SOURCES) == "Web release"
         )
