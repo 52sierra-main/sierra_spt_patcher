@@ -431,7 +431,13 @@ class HybridSierraPatcherGUI(ResilientSierraPatcherGUI):
             self._archived_cleanup_pending = False
             self._archived_cleanup_package_id = None
             self._archived_cleanup_cache = None
-        return super()._run_install()
+        result = super()._run_install()
+        if not getattr(self, "_install_running", False):
+            self._offline_source_config = None
+            self._archived_cleanup_pending = False
+            self._archived_cleanup_package_id = None
+            self._archived_cleanup_cache = None
+        return result
 
     def _set_phase(self, phase: str):
         if phase == "Done" and self._archived_cleanup_pending:

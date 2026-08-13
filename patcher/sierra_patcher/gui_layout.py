@@ -9,6 +9,7 @@ from .game_copy import CopyDestinationStatus, inspect_copy_destination, paths_ov
 from .gui import _hide_console_on_windows
 from .gui_polished import PolishedSierraPatcherGUI
 from .i18n import canonical_choice, tr
+from .paths import WORKING_DIR
 from .registry import exe_version, query_install
 
 
@@ -210,6 +211,8 @@ class LayoutSierraPatcherGUI(PolishedSierraPatcherGUI):
         destination = self._destination_value()
         if not destination:
             return CopyDestinationStatus(False, "destination_missing")
+        if self._destination_overlaps_cache(destination):
+            return CopyDestinationStatus(False, "cache_overlap")
         try:
             installation = query_install()
         except Exception:
@@ -220,9 +223,16 @@ class LayoutSierraPatcherGUI(PolishedSierraPatcherGUI):
         version = exe_version(source / "EscapeFromTarkov.exe")
         return inspect_copy_destination(source, destination, version)
 
+    def _destination_overlaps_cache(self, destination: str) -> bool:
+        cache_value = self.i_web_cache.get().strip()
+        cache_root = Path(cache_value or (Path(WORKING_DIR) / "web_cache"))
+        return paths_overlap(cache_root, destination)
+
     def _destination_ready_for_install(self) -> bool:
         destination = self._destination_value()
         if not destination:
+            return False
+        if self._destination_overlaps_cache(destination):
             return False
         if self._automatic_copy_enabled():
             return self._copy_destination_status().ready
@@ -242,6 +252,8 @@ class LayoutSierraPatcherGUI(PolishedSierraPatcherGUI):
         destination = self._destination_value()
         if not destination:
             return tr("Destination folder is required.")
+        if self._destination_overlaps_cache(destination):
+            return tr("The destination and cache folders must be separate.")
         if not self._automatic_copy_enabled():
             try:
                 installation = query_install()
@@ -255,6 +267,7 @@ class LayoutSierraPatcherGUI(PolishedSierraPatcherGUI):
         messages = {
             "source_missing": "Could not detect the Live Tarkov folder. Use an existing copy instead.",
             "destination_missing": "Destination folder is required.",
+            "cache_overlap": "The destination and cache folders must be separate.",
             "overlap": "The Live Tarkov folder and SPT folder must be separate.",
             "not_directory": "The destination must be a folder.",
             "not_empty": (

@@ -15,6 +15,15 @@ _COPY_STATE_FORMAT_VERSION = 1
 _COPY_CHUNK_BYTES = 4 * 1024 * 1024
 
 
+def _io_path(path: str | os.PathLike) -> str:
+    value = os.path.abspath(os.fspath(path))
+    if os.name != "nt" or value.startswith("\\\\?\\"):
+        return value
+    if value.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + value[2:]
+    return "\\\\?\\" + value
+
+
 @dataclass(frozen=True)
 class CopyDestinationStatus:
     ready: bool
@@ -63,7 +72,8 @@ def _copy_state(source: Path, destination: Path, source_version: str | None) -> 
 
 def _read_state(path: Path) -> dict | None:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        with open(_io_path(path), "r", encoding="utf-8") as stream:
+            data = json.load(stream)
     except Exception:
         return None
     return data if isinstance(data, dict) else None
@@ -77,23 +87,26 @@ def inspect_copy_destination(
     source_path = Path(source)
     destination_path = Path(destination)
 
-    if not source_path.is_dir() or not (source_path / "EscapeFromTarkov.exe").is_file():
+    if not os.path.isdir(_io_path(source_path)) or not os.path.isfile(
+        _io_path(source_path / "EscapeFromTarkov.exe")
+    ):
         return CopyDestinationStatus(False, "source_missing")
     if not os.fspath(destination).strip():
         return CopyDestinationStatus(False, "destination_missing")
     if paths_overlap(source_path, destination_path):
         return CopyDestinationStatus(False, "overlap")
-    if destination_path.exists() and not destination_path.is_dir():
+    destination_exists = os.path.exists(_io_path(destination_path))
+    if destination_exists and not os.path.isdir(_io_path(destination_path)):
         return CopyDestinationStatus(False, "not_directory")
-    if not destination_path.exists():
+    if not destination_exists:
         return CopyDestinationStatus(True, "new")
 
-    entries = list(destination_path.iterdir())
+    entries = os.listdir(_io_path(destination_path))
     if not entries:
         return CopyDestinationStatus(True, "empty")
 
     state_path = _state_path(destination_path)
-    state = _read_state(state_path) if state_path.is_file() else None
+    state = _read_state(state_path) if os.path.isfile(_io_path(state_path)) else None
     if state is None:
         return CopyDestinationStatus(False, "not_empty")
     if state != _copy_state(source_path, destination_path, source_version):
@@ -107,22 +120,23 @@ def _raise_if_cancelled(cancel_event) -> None:
 
 
 def _write_state(path: Path, state: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    os.makedirs(_io_path(path.parent), exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
     try:
-        temporary.write_text(
-            json.dumps(state, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        os.replace(temporary, path)
+        with open(_io_path(temporary), "w", encoding="utf-8") as stream:
+            json.dump(state, stream, indent=2, ensure_ascii=False)
+        os.replace(_io_path(temporary), _io_path(path))
     finally:
-        temporary.unlink(missing_ok=True)
+        try:
+            os.unlink(_io_path(temporary))
+        except FileNotFoundError:
+            pass
 
 
 def _same_file(source: Path, destination: Path) -> bool:
     try:
-        source_stat = source.stat()
-        destination_stat = destination.stat()
+        source_stat = os.stat(_io_path(source))
+        destination_stat = os.stat(_io_path(destination))
     except OSError:
         return False
     return (
@@ -133,7 +147,7 @@ def _same_file(source: Path, destination: Path) -> bool:
 
 def _disk_usage_root(path: Path) -> Path:
     candidate = path
-    while not candidate.exists() and candidate != candidate.parent:
+    while not os.path.exists(_io_path(candidate)) and candidate != candidate.parent:
         candidate = candidate.parent
     return candidate
 
@@ -162,36 +176,42 @@ def copy_live_game(
     directories: list[Path] = []
     total_bytes = 0
     remaining_bytes = 0
-    for root, dirnames, filenames in os.walk(source_path):
+    source_root = _io_path(source_path)
+    for root, dirnames, filenames in os.walk(source_root):
         _raise_if_cancelled(cancel_event)
         root_path = Path(root)
-        relative_root = root_path.relative_to(source_path)
+        relative = os.path.relpath(root, source_root)
+        relative_root = Path() if relative == "." else Path(relative)
         directories.extend(destination_path / relative_root / name for name in dirnames)
         for name in filenames:
             if name == COPY_STATE_FILENAME:
                 continue
             source_file = root_path / name
             destination_file = destination_path / relative_root / name
-            size = source_file.stat().st_size
+            size = os.path.getsize(_io_path(source_file))
             files.append((source_file, destination_file, size))
             total_bytes += size
             if not _same_file(source_file, destination_file):
-                remaining_bytes += size
+                try:
+                    existing_size = os.path.getsize(_io_path(destination_file))
+                except OSError:
+                    existing_size = 0
+                remaining_bytes += max(0, size - existing_size)
 
-    free_bytes = shutil.disk_usage(_disk_usage_root(destination_path)).free
+    free_bytes = shutil.disk_usage(_io_path(_disk_usage_root(destination_path))).free
     if free_bytes < remaining_bytes:
         raise RuntimeError(
             "Not enough free space to copy the Live game "
             f"({remaining_bytes} bytes required, {free_bytes} bytes available)"
         )
 
-    destination_path.mkdir(parents=True, exist_ok=True)
+    os.makedirs(_io_path(destination_path), exist_ok=True)
     _write_state(
         _state_path(destination_path),
         _copy_state(source_path, destination_path, source_version),
     )
     for directory in directories:
-        directory.mkdir(parents=True, exist_ok=True)
+        os.makedirs(_io_path(directory), exist_ok=True)
 
     copied_bytes = 0
     progress_total = max(total_bytes, 1)
@@ -208,8 +228,10 @@ def copy_live_game(
                 )
             continue
 
-        destination_file.parent.mkdir(parents=True, exist_ok=True)
-        with source_file.open("rb") as source_stream, destination_file.open("wb") as destination_stream:
+        os.makedirs(_io_path(destination_file.parent), exist_ok=True)
+        with open(_io_path(source_file), "rb") as source_stream, open(
+            _io_path(destination_file), "wb"
+        ) as destination_stream:
             while True:
                 _raise_if_cancelled(cancel_event)
                 chunk = source_stream.read(_COPY_CHUNK_BYTES)
@@ -224,10 +246,13 @@ def copy_live_game(
                         progress_total,
                         f"Copying {source_file.name}",
                     )
-        shutil.copystat(source_file, destination_file)
+        shutil.copystat(_io_path(source_file), _io_path(destination_file))
 
     _raise_if_cancelled(cancel_event)
-    _state_path(destination_path).unlink(missing_ok=True)
+    try:
+        os.unlink(_io_path(_state_path(destination_path)))
+    except FileNotFoundError:
+        pass
     if on_progress is not None:
         on_progress(
             "install:copy",

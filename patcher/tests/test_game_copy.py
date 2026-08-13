@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from sierra_patcher import proc
+from sierra_patcher import game_copy, proc
 from sierra_patcher.game_copy import (
     COPY_STATE_FILENAME,
     copy_live_game,
@@ -78,15 +80,39 @@ class GameCopyTests(unittest.TestCase):
             self.assertEqual(mismatched.reason, "state_mismatch")
 
             cancel_event.clear()
-            copy_live_game(
-                source,
-                destination,
-                source_version="1.0",
-                cancel_event=cancel_event,
-            )
+            with mock.patch.object(
+                game_copy.shutil,
+                "disk_usage",
+                return_value=mock.Mock(free=1024 * 1024),
+            ):
+                copy_live_game(
+                    source,
+                    destination,
+                    source_version="1.0",
+                    cancel_event=cancel_event,
+                )
 
             self.assertFalse((destination / COPY_STATE_FILENAME).exists())
             self.assertEqual((destination / "EscapeFromTarkov_Data.bin").read_bytes(), payload)
+
+    @unittest.skipUnless(os.name == "nt", "Windows long-path behavior")
+    def test_copy_supports_long_windows_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "Live"
+            destination = root / "SPT"
+            source.mkdir()
+            (source / "EscapeFromTarkov.exe").write_bytes(b"exe")
+            relative = Path(*(["deep-folder-name" * 4] * 5)) / "payload.bin"
+            source_file = source / relative
+            os.makedirs(game_copy._io_path(source_file.parent), exist_ok=True)
+            with open(game_copy._io_path(source_file), "wb") as stream:
+                stream.write(b"payload")
+
+            copy_live_game(source, destination, source_version="1.0")
+
+            with open(game_copy._io_path(destination / relative), "rb") as stream:
+                self.assertEqual(stream.read(), b"payload")
 
 if __name__ == "__main__":
     unittest.main()

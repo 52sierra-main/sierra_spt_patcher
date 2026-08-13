@@ -110,6 +110,10 @@ class I18nTests(unittest.TestCase):
             i18n.tr("No patch data was downloaded."),
             "패치 데이터는 다운로드하지 않았어요.",
         )
+        self.assertEqual(
+            i18n.tr("The destination and cache folders must be separate."),
+            "대상 폴더와 캐시 폴더는 서로 분리되어 있어야 해요.",
+        )
 
     def test_localized_choices_round_trip_to_internal_value(self) -> None:
         choices = ("Web release", "Archived snapshot")

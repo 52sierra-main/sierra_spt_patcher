@@ -18,6 +18,7 @@ if GUI_ENVIRONMENT:
     from sierra_patcher import (
         gui,
         gui_catalog,
+        gui_hybrid,
         gui_layout,
         gui_polished,
         gui_repository,
@@ -168,6 +169,35 @@ class GuiLanguageSwitchTests(unittest.TestCase):
                 self.assertFalse(self.app._destination_ready_for_install())
                 self.assertIn("disabled", self.app.btn_install.state())
                 self.assertEqual(self.app._destination_badge.cget("text"), "INVALID")
+
+    def test_destination_cannot_overlap_download_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            live = root / "Live"
+            cache = root / "cache"
+            destination = cache / "packages" / "3.11.4" / "SPT"
+            live.mkdir()
+            (live / "EscapeFromTarkov.exe").touch()
+            installation = {"install_path": str(live)}
+            with (
+                mock.patch.object(gui, "query_install", return_value=installation),
+                mock.patch.object(gui, "exe_version", return_value="1.1.0.46699"),
+                mock.patch.object(gui_layout, "query_install", return_value=installation),
+                mock.patch.object(gui_layout, "exe_version", return_value="1.1.0.46699"),
+                mock.patch.object(gui_polished, "query_install", return_value=installation),
+                mock.patch.object(gui_polished, "exe_version", return_value="1.1.0.46699"),
+            ):
+                self.app.i_web_cache.delete(0, "end")
+                self.app.i_web_cache.insert(0, str(cache))
+                self.app.i_dest_var.set(str(destination))
+                self.app._validate_install_ready()
+
+                self.assertFalse(self.app._destination_ready_for_install())
+                self.assertIn("disabled", self.app.btn_install.state())
+                self.assertEqual(
+                    self.app._destination_validation_text(),
+                    "The destination and cache folders must be separate.",
+                )
 
     def test_existing_copy_preflight_uses_destination_version(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -419,6 +449,70 @@ class GuiLanguageSwitchTests(unittest.TestCase):
             copy_live_game.assert_not_called()
             self.assertFalse(destination.exists())
 
+    def test_archived_preparation_failure_does_not_start_automatic_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            live = root / "Live"
+            destination = root / "SPT"
+            live.mkdir()
+            (live / "EscapeFromTarkov.exe").touch()
+            installation = {"install_path": str(live)}
+            self.app.i_source_var.set("Archived snapshot")
+
+            class FailingSource:
+                def prepare(self, **_kwargs):
+                    raise RuntimeError("archived preparation failed")
+
+            with (
+                mock.patch.object(gui, "query_install", return_value=installation),
+                mock.patch.object(gui, "exe_version", return_value="1.1.0.46699"),
+                mock.patch.object(gui_layout, "query_install", return_value=installation),
+                mock.patch.object(gui_layout, "exe_version", return_value="1.1.0.46699"),
+                mock.patch.object(gui_web, "LocalPackageSource", FailingSource),
+                mock.patch.object(gui_web, "copy_live_game") as copy_live_game,
+                mock.patch.object(gui_web, "check_resources"),
+                mock.patch.object(gui_web.messagebox, "showerror"),
+            ):
+                self.app.i_dest_var.set(str(destination))
+                gui_web.IntegratedSierraPatcherGUI._run_install(self.app)
+                deadline = time.monotonic() + 2
+
+                def wait_for_install():
+                    if not self.app._install_running or time.monotonic() >= deadline:
+                        self.app.quit()
+                    else:
+                        self.app.after(10, wait_for_install)
+
+                self.app.after(10, wait_for_install)
+                self.app.mainloop()
+
+            self.assertFalse(self.app._install_running)
+            copy_live_game.assert_not_called()
+            self.assertFalse(destination.exists())
+
+    def test_archived_preflight_stop_clears_pending_cleanup(self) -> None:
+        with (
+            mock.patch.object(self.app, "_snapshot_ready", return_value=True),
+            mock.patch.object(
+                gui_hybrid,
+                "read_archived_snapshot",
+                return_value=SimpleNamespace(package_id="3.11.4"),
+            ),
+            mock.patch.object(
+                gui_layout.LayoutSierraPatcherGUI,
+                "_run_install",
+                return_value=None,
+            ),
+        ):
+            self.app.i_source_var.set("Archived snapshot")
+            self.app.i_archive_path_var.set("snapshot")
+            gui_hybrid.HybridSierraPatcherGUI._run_install(self.app)
+
+        self.assertIsNone(self.app._offline_source_config)
+        self.assertFalse(self.app._archived_cleanup_pending)
+        self.assertIsNone(self.app._archived_cleanup_package_id)
+        self.assertIsNone(self.app._archived_cleanup_cache)
+
     def test_automatic_copy_runs_after_package_preparation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -457,6 +551,12 @@ class GuiLanguageSwitchTests(unittest.TestCase):
                 order.append("patch")
                 return 0, 0, 0
 
+            def finalize_install(*_args, **_kwargs):
+                order.append("finalize")
+
+            def apply_storage(*_args, **_kwargs):
+                order.append("storage")
+
             metadata = SimpleNamespace(
                 version="1.1.0.46699",
                 integrity_folders={},
@@ -479,8 +579,16 @@ class GuiLanguageSwitchTests(unittest.TestCase):
                 mock.patch.object(gui_web.Meta, "read", return_value=metadata),
                 mock.patch.object(gui_web, "missing_requirements_for_metadata", return_value=[]),
                 mock.patch.object(gui_web, "count_patch_files", return_value=0),
-                mock.patch.object(gui_web, "finalize"),
-                mock.patch.object(gui_web, "apply_storage"),
+                mock.patch.object(
+                    gui_web,
+                    "finalize",
+                    side_effect=finalize_install,
+                ) as finalize_call,
+                mock.patch.object(
+                    gui_web,
+                    "apply_storage",
+                    side_effect=apply_storage,
+                ) as apply_storage_call,
                 mock.patch.object(gui_web.messagebox, "showinfo"),
             ):
                 self.app.i_dest_var.set(str(destination))
@@ -497,7 +605,12 @@ class GuiLanguageSwitchTests(unittest.TestCase):
                 self.app.mainloop()
 
             self.assertFalse(self.app._install_running)
-            self.assertEqual(order, ["package", "copy", "patch"])
+            self.assertEqual(order, ["package", "copy", "patch", "finalize", "storage"])
+            finalize_call.assert_called_once_with(
+                str(destination),
+                str(storage / "delete_list.txt"),
+            )
+            self.assertEqual(apply_storage_call.call_args.args[:2], (storage, str(destination)))
 
     def test_preflight_statuses_use_compact_display(self) -> None:
         self.assertEqual(int(self.app._dest_hint.grid_info()["columnspan"]), 3)

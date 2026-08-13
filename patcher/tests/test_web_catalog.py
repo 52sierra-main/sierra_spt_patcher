@@ -31,7 +31,7 @@ class WebCatalogTests(unittest.TestCase):
 
     def test_builds_legacy_catalog_without_new_required_field(self) -> None:
         self.assertEqual(
-            web_catalog.build_catalog(["3.10.0"]),
+            web_catalog.build_catalog(release_ids=["3.10.0"]),
             {"format_version": 1, "releases": [{"id": "3.10.0"}]},
         )
 
@@ -90,15 +90,21 @@ class WebCatalogTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            self.assertEqual(
+                web_delivery._catalog_release_ids(repository, "3.11.4"),
+                ["3.10.0", "3.11.4"],
+            )
 
-            releases = web_delivery._catalog_releases(
+            catalog_path = web_delivery._write_catalog(
                 repository,
                 "3.11.4",
-                "1.1.0.46699",
+                required_live_version="1.1.0.46699",
             )
 
             self.assertEqual(
-                releases,
+                web_catalog.parse_release_catalog(
+                    json.loads(catalog_path.read_text(encoding="utf-8"))
+                ),
                 [
                     CatalogRelease("3.10.0", "1.1.0.46000"),
                     CatalogRelease("3.11.4", "1.1.0.46699"),
@@ -117,13 +123,17 @@ class WebCatalogTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            releases = web_delivery._catalog_releases(
+            catalog_path = web_delivery._write_catalog(
                 repository,
                 "3.11.4",
-                None,
             )
 
-            self.assertEqual(releases, [CatalogRelease("3.11.4")])
+            self.assertEqual(
+                web_catalog.parse_release_catalog(
+                    json.loads(catalog_path.read_text(encoding="utf-8"))
+                ),
+                [CatalogRelease("3.11.4")],
+            )
 
     def test_repository_rebuild_adds_live_versions_to_catalog(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

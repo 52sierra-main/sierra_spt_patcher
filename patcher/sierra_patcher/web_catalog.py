@@ -120,10 +120,10 @@ def fetch_release_catalog(*, timeout: float = 10.0) -> list[str]:
     return [release.id for release in fetch_release_catalog_details(timeout=timeout)]
 
 
-def build_catalog(releases: Iterable[str | CatalogRelease]) -> dict:
+def build_catalog(release_ids: Iterable[str | CatalogRelease]) -> dict:
     seen: set[str] = set()
     catalog_releases = []
-    for value in releases:
+    for value in release_ids:
         if isinstance(value, CatalogRelease):
             release_id = value.id.strip()
             required_live_version = str(value.required_live_version or "").strip() or None

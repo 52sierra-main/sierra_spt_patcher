@@ -64,7 +64,7 @@ class SourceIntegrityLocalizationTests(unittest.TestCase):
         self.assertIn("검사한 파일: 4", text)
         self.assertIn("일치: 1", text)
         self.assertIn("불일치: 3", text)
-        self.assertIn("게임 파일은 변경되지 않았어요.", text)
+        self.assertIn("대상 폴더의 파일은 변경되지 않았습니다.", text)
         self.assertIn("UnityPlayer.dll: 파일 없음", text)
         self.assertIn("예상 1,000바이트, 실제 900바이트", text)
         self.assertIn("c" * 64, text)
@@ -116,7 +116,7 @@ class RuntimeRequirementLocalizationTests(unittest.TestCase):
         self.assertIn(".NET 런타임 9.0 x64", text)
         self.assertIn("Microsoft.NETCore.App 9.0.18", text)
         self.assertIn("9.0 런타임 계열", text)
-        self.assertIn("SPT.Server.runtimeconfig.json에서 요구하는 구성 요소예요.", text)
+        self.assertIn("SPT.Server.runtimeconfig.json에서 요구하는 구성 요소.", text)
         self.assertIn("https://dotnet.microsoft.com/en-us/download/dotnet/9.0", text)
 
     def test_english_runtimeconfig_requirement_keeps_canonical_wording(self) -> None:

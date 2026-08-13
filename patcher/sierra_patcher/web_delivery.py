@@ -48,24 +48,25 @@ def _iter_package_files(canonical_root: Path) -> Iterable[tuple[str, Path]]:
                 yield path.relative_to(canonical_root).as_posix(), path
 
 
-def _catalog_releases(
+def _catalog_release_ids(
     repository_root: Path,
     current_package_id: str,
-    required_live_version: str | None,
-) -> list[CatalogRelease]:
-    """Collect releases while preserving optional metadata from the current catalog."""
-
-    result: list[CatalogRelease] = []
+) -> list[str]:
+    """Collect release IDs without opening any manifests."""
+    result: list[str] = []
     seen: set[str] = set()
 
     catalog_path = repository_root / "catalog.json"
     if catalog_path.is_file():
         try:
             existing = json.loads(catalog_path.read_text(encoding="utf-8"))
-            for release in parse_release_catalog(existing):
-                if release.id not in seen:
-                    seen.add(release.id)
-                    result.append(release)
+            for item in existing.get("releases", []):
+                release_id = item.get("id") if isinstance(item, dict) else item
+                if isinstance(release_id, str):
+                    release_id = release_id.strip()
+                    if release_id and release_id not in seen:
+                        seen.add(release_id)
+                        result.append(release_id)
         except Exception:
             # Rebuild from the local releases directory if an old catalog is
             # damaged rather than blocking package publication.
@@ -79,13 +80,10 @@ def _catalog_releases(
             release_id = release_dir.name
             if release_id not in seen:
                 seen.add(release_id)
-                result.append(CatalogRelease(release_id))
+                result.append(release_id)
 
-    current = CatalogRelease(current_package_id, required_live_version)
-    if current_package_id in seen:
-        result = [current if release.id == current_package_id else release for release in result]
-    else:
-        result.append(current)
+    if current_package_id not in seen:
+        result.append(current_package_id)
     return result
 
 
@@ -119,9 +117,22 @@ def _write_catalog(
     _raise_if_cancelled(cancel_event)
     catalog_path = repository_root / "catalog.json"
     temp_catalog = repository_root / "catalog.json.tmp"
-    data = build_catalog(
-        _catalog_releases(repository_root, package_id, required_live_version)
-    )
+    existing_versions = {}
+    if catalog_path.is_file():
+        try:
+            existing = json.loads(catalog_path.read_text(encoding="utf-8"))
+            existing_versions = {
+                release.id: release.required_live_version
+                for release in parse_release_catalog(existing)
+            }
+        except Exception:
+            pass
+    existing_versions[package_id] = required_live_version
+    releases = [
+        CatalogRelease(release_id, existing_versions.get(release_id))
+        for release_id in _catalog_release_ids(repository_root, package_id)
+    ]
+    data = build_catalog(releases)
     try:
         temp_catalog.write_text(
             json.dumps(data, indent=2, ensure_ascii=False),

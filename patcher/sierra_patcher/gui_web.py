@@ -797,15 +797,15 @@ class IntegratedSierraPatcherGUI(SierraPatcherGUI):
                     else destination
                 )
                 executable = os.path.join(version_root, "EscapeFromTarkov.exe")
-                selected_version = exe_version(executable) or "-"
+                live_version = exe_version(executable) or "-"
                 if not force:
-                    if meta.version and selected_version != meta.version:
+                    if meta.version and live_version != meta.version:
                         message = tr(
                             "Version mismatch detected.\n\n"
                             "Live client: {live_version}\n"
                             "Expected: {expected_version}\n\n"
                             "If your live version exceeds that of the patch, please wait for an update. Otherwise, please update your live game and try again.",
-                            live_version=selected_version,
+                            live_version=live_version,
                             expected_version=meta.version,
                         )
                         self._log("[install] stopped: version mismatch")
@@ -818,7 +818,7 @@ class IntegratedSierraPatcherGUI(SierraPatcherGUI):
                     copy_live_game(
                         live_path,
                         destination,
-                        source_version=None if selected_version == "-" else selected_version,
+                        source_version=None if live_version == "-" else live_version,
                         on_progress=self._web_progress_callback(),
                         cancel_event=self._cancel,
                     )

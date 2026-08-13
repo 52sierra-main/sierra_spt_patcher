@@ -127,10 +127,10 @@ class CatalogSierraPatcherGUI(IntegratedSierraPatcherGUI):
 
         def worker():
             try:
-                release_details = fetch_release_catalog_details()
+                releases = fetch_release_catalog_details()
                 error = None
             except Exception as exc:
-                release_details = []
+                releases = []
                 error = str(exc)
 
             def finish():
@@ -138,12 +138,12 @@ class CatalogSierraPatcherGUI(IntegratedSierraPatcherGUI):
                 self._catalog_loaded = error is None
                 self._catalog_error = error
                 self._catalog_release_details = {
-                    release.id: release for release in release_details
+                    release.id: release for release in releases
                 }
                 self._release_probe_loading.clear()
                 self._release_probe_checked.clear()
 
-                release_ids = tuple(release.id for release in release_details)
+                release_ids = tuple(release.id for release in releases)
                 values = (tr(CATALOG_PLACEHOLDER), *release_ids)
                 self.i_web_release.configure(values=values)
                 self.i_web_release_var.set(tr(CATALOG_PLACEHOLDER))
@@ -153,12 +153,12 @@ class CatalogSierraPatcherGUI(IntegratedSierraPatcherGUI):
                         text=tr("Could not load versions. Check repository catalog.json.")
                     )
                     self._log(f"[catalog] load failed: {error}")
-                elif not release_details:
+                elif not releases:
                     self._release_hint.configure(text=tr("No web releases are currently listed."))
                     self._log("[catalog] loaded: no releases")
                 else:
                     self._release_hint.configure(text=tr("Version selection is required."))
-                    self._log(f"[catalog] loaded {len(release_details)} release(s)")
+                    self._log(f"[catalog] loaded {len(releases)} release(s)")
 
                 if canonical_choice(self.i_source_var.get(), gui_web.PACKAGE_SOURCES) != "Web release":
                     self._release_hint.grid_remove()

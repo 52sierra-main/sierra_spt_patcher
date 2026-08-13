@@ -149,6 +149,8 @@ _KO = {
         "본섭 타르코프 폴더를 탐지하지 못했어요. 기존 복사본 사용으로 전환해 주세요.",
     "The Live Tarkov folder and SPT folder must be separate.":
         "본섭 타르코프 폴더와 SPT 폴더는 서로 분리되어 있어야 해요.",
+    "The destination and cache folders must be separate.":
+        "대상 폴더와 캐시 폴더는 서로 분리되어 있어야 해요.",
     "The destination must be a folder.": "대상은 폴더여야 해요.",
     "This folder already contains files. Use an existing copy or choose an empty folder.":
         "이 폴더에는 이미 파일이 있어요. 기존 복사본 사용으로 전환하거나 빈 폴더를 선택해 주세요.",
@@ -210,7 +212,7 @@ _KO = {
     "Checked: {count}": "검사한 파일: {count}",
     "Matched: {count}": "일치: {count}",
     "Mismatched: {count}": "불일치: {count}",
-    "No game files were modified.": "게임 파일은 변경되지 않았어요.",
+    "No game files were modified.": "대상 폴더의 파일은 변경되지 않았습니다.",
     "Examples:": "예시:",
     "{path}: missing": "{path}: 파일 없음",
     "{path}: size mismatch (expected {expected:,}, found {actual:,} bytes)":
@@ -242,7 +244,7 @@ _KO = {
     "{runtime_name} {train} x64": "{runtime_name} {train} x64",
     "Requires {framework} {version} or a newer patch within the {train} runtime train.":
         "{framework} {version} 이상, {train} 런타임 계열의 더 최신 패치 버전이 필요함.",
-    "Declared by {sources}.": "{sources}에서 요구하는 구성 요소예요.",
+    "Declared by {sources}.": "{sources}에서 요구하는 구성 요소.",
     "{release} needs additional Microsoft .NET components.":
         "{release}에 Microsoft .NET 구성 요소가 추가로 필요함.",
     "Install these from Microsoft, then press Install again. You can continue if you have already installed them elsewhere.":
