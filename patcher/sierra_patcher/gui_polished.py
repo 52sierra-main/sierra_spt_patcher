@@ -151,6 +151,7 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
         )
 
         self._dest_hint.configure(wraplength=420)
+        self._dest_hint.grid_configure(columnspan=3)
         self.i_force.trace_add("write", lambda *_: self._validate_install_ready())
         self._update_required_field_emphasis()
         return root
@@ -235,34 +236,23 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
         destination = self._shown_version(result.destination_version)
 
         if result.status == VersionPreflightStatus.UPDATE_REQUIRED:
-            return tr(
-                "Official Live Tarkov must be updated. Current: {current} · Required: {required}",
-                current=live,
-                required=required,
-            )
+            return f"{live} → {required}"
         if result.status == VersionPreflightStatus.PATCH_UPDATE_REQUIRED:
             return tr(
-                "This release does not support the current Live Tarkov version yet. Current: {current} · Supported: {required}",
+                "Supported {required} · Current {current}",
                 current=live,
                 required=required,
             )
         if result.status == VersionPreflightStatus.SOURCE_MISMATCH:
             return tr(
-                "The selected folder is not a fresh copy of the required Live Tarkov version. Destination: {destination} · Required: {required}",
+                "Found {destination} · Required {required}",
                 destination=destination,
                 required=required,
             )
         if result.status == VersionPreflightStatus.VERSION_UNKNOWN:
-            return tr(
-                "Could not read the Tarkov version. Official Live: {live} · Destination: {destination} · Required: {required}",
-                live=live,
-                destination=destination,
-                required=required,
-            )
+            return tr("Couldn’t read game version")
         if result.status == VersionPreflightStatus.CATALOG_UNVERIFIED:
-            return tr(
-                "This release does not provide pre-download version information. Compatibility will be checked after download."
-            )
+            return tr("No version data · Checked after download")
         if result.status == VersionPreflightStatus.VERSION_CHECKING:
             return tr("Checking release compatibility...")
         return ""
@@ -292,9 +282,9 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
             hint_color = self._UNKNOWN_FG
         else:
             badge_text = {
-                VersionPreflightStatus.UPDATE_REQUIRED: "UPDATE REQUIRED  ⚠",
-                VersionPreflightStatus.PATCH_UPDATE_REQUIRED: "PATCH UPDATE NEEDED  ⚠",
-                VersionPreflightStatus.SOURCE_MISMATCH: "SOURCE MISMATCH  ⚠",
+                VersionPreflightStatus.UPDATE_REQUIRED: "UPDATE LIVE  ⚠",
+                VersionPreflightStatus.PATCH_UPDATE_REQUIRED: "PATCH UPDATE  ⚠",
+                VersionPreflightStatus.SOURCE_MISMATCH: "FOLDER MISMATCH  ⚠",
                 VersionPreflightStatus.VERSION_UNKNOWN: "VERSION UNKNOWN  ⚠",
             }[result.status]
             self._destination_badge.configure(
@@ -309,6 +299,9 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
             self.i_dest.configure(style=entry_style)
         except tk.TclError:
             pass
+        if result.status == VersionPreflightStatus.VERSION_CHECKING:
+            self._dest_hint.grid_remove()
+            return
         self._dest_hint.configure(
             text=self._preflight_hint(result),
             foreground=hint_color,

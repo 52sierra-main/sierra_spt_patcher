@@ -52,10 +52,10 @@ _KO = {
     "Folder does not exist.": "폴더가 존재하지 않습니다.",
     "REQUIRED": "필수",
     "READY  ✓": "준비됨  ✓",
-    "UPDATE REQUIRED  ⚠": "업데이트 필요  ⚠",
-    "PATCH UPDATE NEEDED  ⚠": "패치 업데이트 필요  ⚠",
-    "SOURCE MISMATCH  ⚠": "원본 불일치  ⚠",
-    "VERSION UNKNOWN  ⚠": "버전 확인 불가  ⚠",
+    "UPDATE LIVE  ⚠": "본섭 업데이트  ⚠",
+    "PATCH UPDATE  ⚠": "패치 업데이트  ⚠",
+    "FOLDER MISMATCH  ⚠": "폴더 불일치  ⚠",
+    "VERSION UNKNOWN  ⚠": "확인 불가  ⚠",
     "UNVERIFIED  ⚠": "미확인  ⚠",
     "CHECKING...": "확인 중...",
     "Not found": "찾을 수 없음",
@@ -108,16 +108,10 @@ _KO = {
     "Choose version": "버전을 선택하십시오",
     "choose version": "버전 선택",
     "Not prepared": "준비되지 않음",
-    "Official Live Tarkov must be updated. Current: {current} · Required: {required}":
-        "본섭 타르코프를 업데이트해야 해요. 현재: {current} · 필요: {required}",
-    "This release does not support the current Live Tarkov version yet. Current: {current} · Supported: {required}":
-        "현재 본섭 타르코프 버전은 이 릴리스에서 아직 지원하지 않아요. 현재: {current} · 지원: {required}",
-    "The selected folder is not a fresh copy of the required Live Tarkov version. Destination: {destination} · Required: {required}":
-        "선택한 폴더가 필요한 본섭 타르코프 버전의 새 복사본이 아니에요. 대상: {destination} · 필요: {required}",
-    "Could not read the Tarkov version. Official Live: {live} · Destination: {destination} · Required: {required}":
-        "타르코프 버전을 확인할 수 없어요. 본섭: {live} · 대상: {destination} · 필요: {required}",
-    "This release does not provide pre-download version information. Compatibility will be checked after download.":
-        "이 릴리스에는 다운로드 전 버전 정보가 없어요. 다운로드 후 호환성을 검사해요.",
+    "Supported {required} · Current {current}": "지원 {required} · 현재 {current}",
+    "Found {destination} · Required {required}": "대상 {destination} · 필요 {required}",
+    "Couldn’t read game version": "게임 버전을 읽지 못했어요",
+    "No version data · Checked after download": "버전 정보 없음 · 다운로드 후 확인",
     "Checking release compatibility...": "릴리스 호환성을 확인하고 있어요...",
     "Advanced ▸": "고급 설정 ▸",
     "Advanced ▾": "고급 설정 ▾",

@@ -16,6 +16,10 @@ if GUI_ENVIRONMENT:
     from tkinter import ttk
 
     from sierra_patcher import gui, gui_catalog, gui_polished, gui_repository, i18n
+    from sierra_patcher.version_preflight import (
+        VersionPreflightResult,
+        VersionPreflightStatus,
+    )
     from sierra_patcher.web_catalog import CatalogRelease
 
 
@@ -233,14 +237,17 @@ class GuiLanguageSwitchTests(unittest.TestCase):
 
                 self.assertEqual(
                     self.app._destination_badge.cget("text"),
-                    "UPDATE REQUIRED  ⚠",
+                    "UPDATE LIVE  ⚠",
                 )
                 self.assertEqual(
                     self.app._destination_badge.cget("bg"),
                     self.app._WARNING_BG,
                 )
                 self.assertIn("disabled", self.app.btn_install.state())
-                self.assertIn("Current: 1.1.0.46657", self.app._dest_hint.cget("text"))
+                self.assertEqual(
+                    self.app._dest_hint.cget("text"),
+                    "1.1.0.46657 → 1.1.0.46699",
+                )
 
                 with (
                     mock.patch.object(gui_polished.messagebox, "showwarning") as warning,
@@ -259,16 +266,99 @@ class GuiLanguageSwitchTests(unittest.TestCase):
 
                 self.assertEqual(
                     self.app._destination_badge.cget("text"),
-                    "업데이트 필요  ⚠",
+                    "본섭 업데이트  ⚠",
                 )
-                self.assertIn("본섭 타르코프를 업데이트해야 해요", self.app._dest_hint.cget("text"))
+                self.assertEqual(
+                    self.app._dest_hint.cget("text"),
+                    "1.1.0.46657 → 1.1.0.46699",
+                )
 
                 self.app.i_force.set(True)
                 self.assertNotIn("disabled", self.app.btn_install.state())
                 self.assertEqual(
                     self.app._destination_badge.cget("text"),
-                    "업데이트 필요  ⚠",
+                    "본섭 업데이트  ⚠",
                 )
+
+    def test_preflight_statuses_use_compact_display(self) -> None:
+        self.assertEqual(int(self.app._dest_hint.grid_info()["columnspan"]), 3)
+        cases = (
+            (VersionPreflightStatus.READY, "READY  ✓", "", False),
+            (VersionPreflightStatus.VERSION_CHECKING, "CHECKING...", "", False),
+            (
+                VersionPreflightStatus.UPDATE_REQUIRED,
+                "UPDATE LIVE  ⚠",
+                "1.1.0.46657 → 1.1.0.46699",
+                True,
+            ),
+            (
+                VersionPreflightStatus.PATCH_UPDATE_REQUIRED,
+                "PATCH UPDATE  ⚠",
+                "Supported 1.1.0.46699 · Current 1.1.0.47000",
+                True,
+            ),
+            (
+                VersionPreflightStatus.SOURCE_MISMATCH,
+                "FOLDER MISMATCH  ⚠",
+                "Found 1.1.0.46657 · Required 1.1.0.46699",
+                True,
+            ),
+            (
+                VersionPreflightStatus.VERSION_UNKNOWN,
+                "VERSION UNKNOWN  ⚠",
+                "Couldn’t read game version",
+                True,
+            ),
+            (
+                VersionPreflightStatus.CATALOG_UNVERIFIED,
+                "UNVERIFIED  ⚠",
+                "No version data · Checked after download",
+                True,
+            ),
+        )
+        color_by_status = {
+            VersionPreflightStatus.READY: (self.app._READY_BG, self.app._READY_FG),
+            VersionPreflightStatus.VERSION_CHECKING: (
+                self.app._UNKNOWN_BG,
+                self.app._UNKNOWN_FG,
+            ),
+            VersionPreflightStatus.CATALOG_UNVERIFIED: (
+                self.app._UNKNOWN_BG,
+                self.app._UNKNOWN_FG,
+            ),
+        }
+
+        for status, badge_text, hint_text, hint_visible in cases:
+            with self.subTest(status=status):
+                self.app._set_badge(self.app._destination_badge, ready=True)
+                self.app._dest_hint.configure(text="stale")
+                self.app._dest_hint.grid()
+                result = VersionPreflightResult(
+                    status,
+                    "1.1.0.46699",
+                    "1.1.0.47000"
+                    if status == VersionPreflightStatus.PATCH_UPDATE_REQUIRED
+                    else "1.1.0.46657",
+                    "1.1.0.46657",
+                )
+
+                self.app._apply_version_preflight(result)
+
+                expected_bg, expected_fg = color_by_status.get(
+                    status,
+                    (self.app._WARNING_BG, self.app._WARNING_FG),
+                )
+                self.assertEqual(self.app._destination_badge.cget("text"), badge_text)
+                self.assertEqual(self.app._destination_badge.cget("bg"), expected_bg)
+                self.assertEqual(self.app._destination_badge.cget("fg"), expected_fg)
+                self.assertEqual(bool(self.app._dest_hint.grid_info()), hint_visible)
+                if hint_visible:
+                    self.assertEqual(self.app._dest_hint.cget("text"), hint_text)
+                    self.assertEqual(
+                        str(self.app._dest_hint.cget("foreground")),
+                        expected_fg,
+                    )
+                    self.assertNotIn("\n", hint_text)
 
     def test_legacy_catalog_release_is_probed_automatically(self) -> None:
         self.app._catalog_release_details = {
