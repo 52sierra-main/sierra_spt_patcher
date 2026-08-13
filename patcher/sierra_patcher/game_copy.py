@@ -9,7 +9,6 @@ from pathlib import Path
 
 from . import proc
 
-
 COPY_STATE_FILENAME = ".sierra-copy-state.json"
 _COPY_STATE_FORMAT_VERSION = 1
 _COPY_CHUNK_BYTES = 4 * 1024 * 1024
@@ -49,7 +48,11 @@ def paths_overlap(source: str | os.PathLike, destination: str | os.PathLike) -> 
 
     source_key = _canonical_path(source)
     destination_key = _canonical_path(destination)
-    path_module = ntpath if _windows_style(source_key) or _windows_style(destination_key) else os.path
+    path_module = (
+        ntpath
+        if _windows_style(source_key) or _windows_style(destination_key)
+        else os.path
+    )
     try:
         common = path_module.commonpath((source_key, destination_key))
     except ValueError:
@@ -121,14 +124,14 @@ def _raise_if_cancelled(cancel_event) -> None:
 
 def _write_state(path: Path, state: dict) -> None:
     os.makedirs(_io_path(path.parent), exist_ok=True)
-    temporary = path.with_name(path.name + ".tmp")
+    temp = path.with_name(path.name + ".tmp")
     try:
-        with open(_io_path(temporary), "w", encoding="utf-8") as stream:
+        with open(_io_path(temp), "w", encoding="utf-8") as stream:
             json.dump(state, stream, indent=2, ensure_ascii=False)
-        os.replace(_io_path(temporary), _io_path(path))
+        os.replace(_io_path(temp), _io_path(path))
     finally:
         try:
-            os.unlink(_io_path(temporary))
+            os.unlink(_io_path(temp))
         except FileNotFoundError:
             pass
 

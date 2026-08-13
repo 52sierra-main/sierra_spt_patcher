@@ -635,44 +635,6 @@ class SierraPatcherGUI(tk.Tk):
             summarize_integrity_list(self.g_integrity_folders)
         )
 
-    def _refresh_destination_status(self):
-        destination_reader = getattr(self, "_destination_value", None)
-        dst = (
-            destination_reader()
-            if callable(destination_reader)
-            else self.i_dest.get().strip()
-        )
-        if "dst_path" in self._stat:
-            self._stat["dst_path"].set(dst or "—")
-        if "dst_version" in self._stat:
-            try:
-                executable = Path(dst) / "EscapeFromTarkov.exe"
-                destination_version = (
-                    (exe_version(executable) or "—") if executable.is_file() else "—"
-                )
-                automatic_copy_reader = getattr(self, "_automatic_copy_enabled", None)
-                if (
-                    destination_version == "—"
-                    and callable(automatic_copy_reader)
-                    and automatic_copy_reader()
-                ):
-                    destination_version = self._stat["tk_version"].get() or "—"
-                self._stat["dst_version"].set(destination_version)
-            except Exception:
-                self._stat["dst_version"].set("—")
-
-        try:
-            if dst:
-                usage_root = Path(dst)
-                while not usage_root.exists() and usage_root != usage_root.parent:
-                    usage_root = usage_root.parent
-                free = shutil.disk_usage(usage_root).free
-                self._stat["dst_free"].set(self._format_bytes(free))
-            else:
-                self._stat["dst_free"].set("—")
-        except Exception:
-            self._stat["dst_free"].set("—")
-
     def _refresh_status(self):
         # --- System ---
         try:
@@ -731,7 +693,15 @@ class SierraPatcherGUI(tk.Tk):
             self._stat["tk_publisher"].set(tr("error"))
 
         # --- Destination (chosen folder) ---
-        self._refresh_destination_status()
+        dst = self.i_dest.get().strip()
+        try:
+            if dst and os.path.isdir(dst):
+                free = shutil.disk_usage(dst).free
+                self._stat["dst_free"].set(self._format_bytes(free))
+            else:
+                self._stat["dst_free"].set("—")
+        except Exception:
+            self._stat["dst_free"].set("—")
 
 
     # ---------- UI builders ----------

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
@@ -229,6 +230,32 @@ class LayoutSierraPatcherGUI(PolishedSierraPatcherGUI):
         cache_root = Path(cache_value or (Path(WORKING_DIR) / "web_cache"))
         return paths_overlap(cache_root, destination)
 
+    def _refresh_destination_status(self):
+        destination = self._destination_value()
+        self._stat["dst_path"].set(destination or "—")
+        try:
+            executable = Path(destination) / "EscapeFromTarkov.exe"
+            destination_version = (
+                (exe_version(executable) or "—") if executable.is_file() else "—"
+            )
+            if destination_version == "—" and self._automatic_copy_enabled():
+                destination_version = self._stat["tk_version"].get() or "—"
+            self._stat["dst_version"].set(destination_version)
+        except Exception:
+            self._stat["dst_version"].set("—")
+
+        try:
+            if destination:
+                usage_root = Path(destination)
+                while not usage_root.exists() and usage_root != usage_root.parent:
+                    usage_root = usage_root.parent
+                free = shutil.disk_usage(usage_root).free
+                self._stat["dst_free"].set(self._format_bytes(free))
+            else:
+                self._stat["dst_free"].set("—")
+        except Exception:
+            self._stat["dst_free"].set("—")
+
     def _destination_ready_for_install(self) -> bool:
         destination = self._destination_value()
         if not destination:
@@ -266,13 +293,16 @@ class LayoutSierraPatcherGUI(PolishedSierraPatcherGUI):
 
         reason = self._copy_destination_status().reason
         messages = {
-            "source_missing": "Could not detect the Live Tarkov folder. Use an existing copy instead.",
+            "source_missing": (
+                "Could not detect the Live Tarkov folder. Use an existing copy instead."
+            ),
             "destination_missing": "Destination folder is required.",
             "cache_overlap": "The destination and cache folders must be separate.",
             "overlap": "The Live Tarkov folder and SPT folder must be separate.",
             "not_directory": "The destination must be a folder.",
             "not_empty": (
-                "This folder already contains files. Use an existing copy or choose an empty folder."
+                "This folder already contains files. Use an existing copy or choose an "
+                "empty folder."
             ),
             "state_mismatch": (
                 "This partial copy belongs to a different Live folder or version. "

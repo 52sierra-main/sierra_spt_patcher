@@ -48,10 +48,7 @@ def _iter_package_files(canonical_root: Path) -> Iterable[tuple[str, Path]]:
                 yield path.relative_to(canonical_root).as_posix(), path
 
 
-def _catalog_release_ids(
-    repository_root: Path,
-    current_package_id: str,
-) -> list[str]:
+def _catalog_release_ids(repository_root: Path, current_package_id: str) -> list[str]:
     """Collect release IDs without opening any manifests."""
     result: list[str] = []
     seen: set[str] = set()

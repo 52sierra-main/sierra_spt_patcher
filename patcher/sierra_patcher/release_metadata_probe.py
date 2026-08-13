@@ -14,7 +14,6 @@ from .web_download import (
     fetch_manifest,
 )
 
-
 _METADATA_PATH = "storage/metadata.info"
 
 
@@ -96,9 +95,13 @@ def probe_archived_live_version(snapshot_root: str | Path) -> str | None:
         try:
             chunk = object_path.read_bytes()
         except OSError as exc:
-            raise DownloadError(f"archived metadata object is missing: {object_spec.object_id}") from exc
+            raise DownloadError(
+                f"archived metadata object is missing: {object_spec.object_id}"
+            ) from exc
         if len(chunk) != object_spec.size:
-            raise DownloadError(f"archived metadata object has invalid size: {object_spec.object_id}")
+            raise DownloadError(
+                f"archived metadata object has invalid size: {object_spec.object_id}"
+            )
         chunks.append(chunk)
 
     raw = b"".join(chunks)
