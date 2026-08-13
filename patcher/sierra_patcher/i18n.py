@@ -58,6 +58,8 @@ _KO = {
     "VERSION UNKNOWN  ⚠": "확인 불가  ⚠",
     "UNVERIFIED  ⚠": "미확인  ⚠",
     "CHECKING...": "확인 중...",
+    "INVALID": "사용 불가",
+    "RESUME": "이어받기",
     "Not found": "찾을 수 없음",
     "not found": "찾을 수 없음",
     "error": "오류",
@@ -80,8 +82,16 @@ _KO = {
     "Verified objects and completed package files are retained for resume/reuse.":
         "확인된 파일과 완성된 패키지는 이어받기와 재사용을 위해 보관됩니다.",
     "Installation": "설치",
+    "Install mode": "설치 방식",
+    "Automatic copy (recommended)": "자동 복사 (권장)",
+    "Use existing copy": "기존 복사본 사용",
+    "New SPT folder": "새 SPT 폴더",
     "Destination to patch": "패치할 대상 폴더",
+    "Select new SPT folder": "새 SPT 폴더 선택",
     "Select pasted Live folder": "복사해 둔 라이브 폴더 선택",
+    "Original": "원본",
+    "Auto-detected": "자동 탐지됨",
+    "Not detected": "탐지되지 않음",
     "Patch threads": "패치 스레드 수",
     "Force (bypass metadata checks)": "강제 진행 (메타데이터 검사 건너뛰기)",
     "Install SPT": "SPT 설치",
@@ -134,6 +144,20 @@ _KO = {
         "Sierra Patcher가 변경할, 복사해 둔 라이브 폴더를 선택해 주세요.",
     "Missing folder": "폴더 필요",
     "Select a valid destination folder.": "올바른 대상 폴더를 선택하세요.",
+    "Select a new SPT folder.": "새 SPT 폴더를 선택해 주세요.",
+    "Could not detect the Live Tarkov folder. Use an existing copy instead.":
+        "본섭 타르코프 폴더를 탐지하지 못했어요. 기존 복사본 사용으로 전환해 주세요.",
+    "The Live Tarkov folder and SPT folder must be separate.":
+        "본섭 타르코프 폴더와 SPT 폴더는 서로 분리되어 있어야 해요.",
+    "The destination must be a folder.": "대상은 폴더여야 해요.",
+    "This folder already contains files. Use an existing copy or choose an empty folder.":
+        "이 폴더에는 이미 파일이 있어요. 기존 복사본 사용으로 전환하거나 빈 폴더를 선택해 주세요.",
+    "This partial copy belongs to a different Live folder or version. Choose another empty folder.":
+        "이 부분 복사본은 다른 본섭 폴더나 버전에서 만들어졌어요. 다른 빈 폴더를 선택해 주세요.",
+    "The interrupted Live game copy will resume.": "중단된 본섭 게임 복사를 이어서 진행해요.",
+    "Live folder not detected": "본섭 폴더 탐지 실패",
+    "Sierra could not detect the official Live Tarkov folder. Confirm that the selected destination is a separate copy before continuing.":
+        "공식 본섭 타르코프 폴더를 탐지하지 못했어요. 선택한 대상이 별도의 복사본인지 확인한 뒤 계속해 주세요.",
     "Please set Destination folder.": "대상 폴더를 지정하시오.",
     "Metadata error": "메타데이터 오류",
     "Could not read patch metadata:\n{error}": "패치 메타데이터를 읽지 못함:\n{error}",
@@ -152,6 +176,11 @@ _KO = {
     "Publishing web package": "웹 패키지 게시 중",
     "Verifying archived objects": "보관된 파일 확인 중",
     "Resuming archived snapshot": "보관 스냅샷 이어받는 중",
+    "Copying Live game": "본섭 게임 복사 중",
+    "Scanning Live game...": "본섭 게임 파일 확인 중...",
+    "Copying {name}": "{name} 복사 중",
+    "Reusing {name}": "{name} 재사용 중",
+    "Live game copy complete": "본섭 게임 복사 완료",
     "Applying patches": "패치 적용 중",
     "Retrying failed patches": "실패한 패치 다시 시도 중",
     "Verifying patches": "패치 확인 중",
@@ -181,7 +210,7 @@ _KO = {
     "Checked: {count}": "검사한 파일: {count}",
     "Matched: {count}": "일치: {count}",
     "Mismatched: {count}": "불일치: {count}",
-    "No game files were modified.": "대상 폴더의 파일은 변경되지 않았습니다.",
+    "No game files were modified.": "게임 파일은 변경되지 않았어요.",
     "Examples:": "예시:",
     "{path}: missing": "{path}: 파일 없음",
     "{path}: size mismatch (expected {expected:,}, found {actual:,} bytes)":
@@ -213,7 +242,7 @@ _KO = {
     "{runtime_name} {train} x64": "{runtime_name} {train} x64",
     "Requires {framework} {version} or a newer patch within the {train} runtime train.":
         "{framework} {version} 이상, {train} 런타임 계열의 더 최신 패치 버전이 필요함.",
-    "Declared by {sources}.": "{sources}에서 요구하는 구성 요소.",
+    "Declared by {sources}.": "{sources}에서 요구하는 구성 요소예요.",
     "{release} needs additional Microsoft .NET components.":
         "{release}에 Microsoft .NET 구성 요소가 추가로 필요함.",
     "Install these from Microsoft, then press Install again. You can continue if you have already installed them elsewhere.":
@@ -589,6 +618,8 @@ _PROGRESS_EXACT = {
     "No objects required": "필요한 객체 없음",
     "No package files": "패키지 파일 없음",
     "No archived objects to verify": "확인할 보관 객체 없음",
+    "Scanning Live game...": "본섭 게임 파일 확인 중...",
+    "Live game copy complete": "본섭 게임 복사 완료",
     "No delta patches generated": "생성된 델타 패치 없음",
     "No patches to verify": "확인할 패치 없음",
     "delete list written": "삭제 목록 기록 완료",
@@ -640,6 +671,8 @@ def _translate_progress_text(message: str, language: str) -> str:
             (r"retry (\d+)/(\d+) (\d+)/(\d+)", lambda m: f"재시도 {m.group(1)}/{m.group(2)} 진행 {m.group(3)}/{m.group(4)}"),
             (r"hashed (\d+)/(\d+) delta sources", lambda m: f"델타 원본 해시 생성 {m.group(1)}/{m.group(2)}"),
             (r"verified (\d+)/(\d+) source files", lambda m: f"원본 파일 확인 완료 {m.group(1)}/{m.group(2)}"),
+            (r"Copying (.+)", lambda m: f"복사 중 {m.group(1)}"),
+            (r"Reusing (.+)", lambda m: f"재사용 중 {m.group(1)}"),
         )
     else:
         if text in _PROGRESS_EXACT or text in _PROGRESS_STATES:
@@ -675,6 +708,8 @@ def _translate_progress_text(message: str, language: str) -> str:
             (r"재시도 (\d+)/(\d+) 진행 (\d+)/(\d+)", lambda m: f"retry {m.group(1)}/{m.group(2)} {m.group(3)}/{m.group(4)}"),
             (r"델타 원본 해시 생성 (\d+)/(\d+)", lambda m: f"hashed {m.group(1)}/{m.group(2)} delta sources"),
             (r"원본 파일 확인 완료 (\d+)/(\d+)", lambda m: f"verified {m.group(1)}/{m.group(2)} source files"),
+            (r"복사 중 (.+)", lambda m: f"Copying {m.group(1)}"),
+            (r"재사용 중 (.+)", lambda m: f"Reusing {m.group(1)}"),
         )
 
     for pattern, render in patterns:

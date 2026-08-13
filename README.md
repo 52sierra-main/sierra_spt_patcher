@@ -13,8 +13,8 @@ The current installer includes resumable web delivery, SHA-256 package verificat
 ## Using it
 
 1. Install or verify your official Escape from Tarkov installation.
-2. Make a **fresh copy** of the Tarkov folder. Do not patch the official Live folder directly.
-3. Open Sierra Installer, choose the SPT release you want, select the copied folder, and click **Install SPT**.
+2. Open Sierra Installer, choose the SPT release, and leave **Automatic copy (recommended)** selected.
+3. Select a new or empty SPT folder and click **Install SPT**. If automatic detection is unavailable, choose **Use existing copy** and select a fresh Tarkov copy instead.
 4. Wait for the installer to finish before launching SPT.
 
 For troubleshooting and a foolproof step-by-step guide, see **[USER_GUIDE.md](USER_GUIDE.md)**.

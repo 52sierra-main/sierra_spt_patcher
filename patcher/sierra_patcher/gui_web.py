@@ -11,6 +11,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from . import proc
 from .delete_list import build_delete_list, finalize
+from .game_copy import copy_live_game
 from .gui import SierraPatcherGUI, _hide_console_on_windows, _safe_call
 from .i18n import canonical_choice, localized_choices, tr, tr_progress
 from .metadata import Meta, stamp_from_game_exe
@@ -123,6 +124,7 @@ class IntegratedSierraPatcherGUI(SierraPatcherGUI):
             "web:publish": "Publishing web package",
             "archive:objects": "Verifying archived objects",
             "archive:resume": "Resuming archived snapshot",
+            "install:copy": "Copying Live game",
         }
         lock = threading.Lock()
         state = {"phase": None, "time": 0.0}
@@ -429,7 +431,8 @@ class IntegratedSierraPatcherGUI(SierraPatcherGUI):
 
         self._stat = {key: tk.StringVar(value="—") for key in [
             "sys_cpu", "sys_cores", "sys_ram", "pat_version", "pat_title",
-            "pat_patches", "tk_path", "tk_version", "tk_publisher", "dst_free",
+            "pat_patches", "tk_path", "tk_version", "tk_publisher",
+            "dst_path", "dst_version", "dst_free",
         ]}
         self._status_row(card, 1, 0, "CPU", self._stat["sys_cpu"], kind="path")
         self._status_row(card, 2, 0, "Cores", self._stat["sys_cores"])
@@ -440,7 +443,9 @@ class IntegratedSierraPatcherGUI(SierraPatcherGUI):
         self._status_row(card, 1, 2, "Path", self._stat["tk_path"], kind="path")
         self._status_row(card, 2, 2, "Version", self._stat["tk_version"])
         self._status_row(card, 3, 2, "Publisher", self._stat["tk_publisher"])
-        self._status_row(card, 1, 3, "Free", self._stat["dst_free"])
+        self._status_row(card, 1, 3, "Path", self._stat["dst_path"], kind="path")
+        self._status_row(card, 2, 3, "Version", self._stat["dst_version"])
+        self._status_row(card, 3, 3, "Free", self._stat["dst_free"])
         ttk.Button(card, text=tr("Refresh"), command=self._refresh_status).grid(
             row=4, column=0, sticky="w", padx=8, pady=(6, 8)
         )
@@ -463,8 +468,18 @@ class IntegratedSierraPatcherGUI(SierraPatcherGUI):
         self._validate_install_ready()
 
     def _validate_install_ready(self):
-        destination = (self.i_dest_var.get() or "").strip()
-        valid_destination = bool(destination and os.path.isdir(destination))
+        destination_reader = getattr(self, "_destination_value", None)
+        destination = (
+            destination_reader()
+            if callable(destination_reader)
+            else (self.i_dest_var.get() or "").strip()
+        )
+        destination_validator = getattr(self, "_destination_ready_for_install", None)
+        valid_destination = (
+            bool(destination_validator())
+            if callable(destination_validator)
+            else bool(destination and os.path.isdir(destination))
+        )
         valid_source = True
         source_value = getattr(
             self,
@@ -685,13 +700,30 @@ class IntegratedSierraPatcherGUI(SierraPatcherGUI):
             self._log("[install] duplicate start ignored: installation already running")
             return
 
-        destination = self.i_dest.get().strip()
+        destination_reader = getattr(self, "_destination_value", None)
+        destination = (
+            destination_reader()
+            if callable(destination_reader)
+            else self.i_dest.get().strip()
+        )
         source_mode = canonical_choice(self.i_source_var.get(), PACKAGE_SOURCES)
         release_id = self.i_web_release.get().strip()
         force = self.i_force.get()
 
-        if not destination or not os.path.isdir(destination):
-            messagebox.showerror(tr("Missing folder"), tr("Select a valid destination folder."))
+        destination_validator = getattr(self, "_destination_ready_for_install", None)
+        valid_destination = (
+            bool(destination_validator())
+            if callable(destination_validator)
+            else bool(destination and os.path.isdir(destination))
+        )
+        if not valid_destination:
+            validation_message = getattr(self, "_destination_validation_text", None)
+            messagebox.showerror(
+                tr("Missing folder"),
+                validation_message()
+                if callable(validation_message)
+                else tr("Select a valid destination folder."),
+            )
             return
         if source_mode == "Web release" and not release_id:
             messagebox.showerror(tr("Release required"), tr("Enter the web Release ID to install."))
@@ -749,24 +781,50 @@ class IntegratedSierraPatcherGUI(SierraPatcherGUI):
                     self._log("[install] stopped for missing dependencies")
                     return
 
+                automatic_copy_reader = getattr(self, "_automatic_copy_enabled", None)
+                automatic_copy = bool(
+                    automatic_copy_reader()
+                    if callable(automatic_copy_reader)
+                    else False
+                )
                 installation = query_install()
-                if not installation:
+                if automatic_copy and not installation:
                     raise RuntimeError("Tarkov installation not found (registry)")
 
+                version_root = (
+                    installation["install_path"]
+                    if automatic_copy and installation
+                    else destination
+                )
+                executable = os.path.join(version_root, "EscapeFromTarkov.exe")
+                selected_version = exe_version(executable) or "-"
                 if not force:
-                    executable = os.path.join(installation["install_path"], "EscapeFromTarkov.exe")
-                    live_version = exe_version(executable) or "-"
-                    if meta.version and live_version != meta.version:
+                    if meta.version and selected_version != meta.version:
                         message = tr(
                             "Version mismatch detected.\n\n"
                             "Live client: {live_version}\n"
                             "Expected: {expected_version}\n\n"
                             "If your live version exceeds that of the patch, please wait for an update. Otherwise, please update your live game and try again.",
-                            live_version=live_version,
+                            live_version=selected_version,
                             expected_version=meta.version,
                         )
                         self._log("[install] stopped: version mismatch")
                         self._stop_with_message("Version mismatch", message)
+                        return
+
+                if automatic_copy:
+                    live_path = installation["install_path"]
+                    self._log(f"[copy] start source={live_path} destination={destination}")
+                    copy_live_game(
+                        live_path,
+                        destination,
+                        source_version=None if selected_version == "-" else selected_version,
+                        on_progress=self._web_progress_callback(),
+                        cancel_event=self._cancel,
+                    )
+                    self._log("[copy] Live game copy completed")
+                    _safe_call(self, self._refresh_status)
+                    if self._cancel.is_set():
                         return
 
                 integrity = getattr(meta, "integrity_folders", None) or {}

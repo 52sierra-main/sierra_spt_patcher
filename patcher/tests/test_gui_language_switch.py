@@ -15,7 +15,15 @@ if GUI_ENVIRONMENT:
     import tkinter as tk
     from tkinter import ttk
 
-    from sierra_patcher import gui, gui_catalog, gui_polished, gui_repository, i18n
+    from sierra_patcher import (
+        gui,
+        gui_catalog,
+        gui_layout,
+        gui_polished,
+        gui_repository,
+        gui_web,
+        i18n,
+    )
     from sierra_patcher.version_preflight import (
         VersionPreflightResult,
         VersionPreflightStatus,
@@ -131,6 +139,86 @@ class GuiLanguageSwitchTests(unittest.TestCase):
             "LanguageSelected.TButton",
         )
 
+    def test_install_mode_defaults_to_automatic_and_preserves_destination(self) -> None:
+        self.assertEqual(self.app.i_install_mode_var.get(), "auto")
+        self.assertEqual(self.app.i_destination_label.cget("text"), "New SPT folder")
+        self.assertTrue(self.app._live_source_frame.grid_info())
+
+        destination = r"X:\SPT\3.11.4"
+        self.app.i_dest_var.set(destination)
+        self.app.i_install_mode_var.set("existing")
+        self.app._sync_install_mode_ui()
+
+        self.assertEqual(self.app.i_dest_var.get(), destination)
+        self.assertEqual(self.app.i_destination_label.cget("text"), "Destination to patch")
+        self.assertFalse(self.app._live_source_frame.grid_info())
+
+    def test_live_folder_is_never_a_valid_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            live = Path(temporary) / "Live"
+            live.mkdir()
+            (live / "EscapeFromTarkov.exe").touch()
+            installation = {"install_path": str(live)}
+            with mock.patch.object(gui_layout, "query_install", return_value=installation):
+                self.app.i_install_mode_var.set("existing")
+                self.app.i_dest_var.set(str(live))
+                self.app.i_force.set(True)
+                self.app._sync_install_mode_ui()
+
+                self.assertFalse(self.app._destination_ready_for_install())
+                self.assertIn("disabled", self.app.btn_install.state())
+                self.assertEqual(self.app._destination_badge.cget("text"), "INVALID")
+
+    def test_existing_copy_preflight_uses_destination_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            live = root / "Live"
+            destination = root / "Copy"
+            live.mkdir()
+            destination.mkdir()
+            (live / "EscapeFromTarkov.exe").touch()
+            (destination / "EscapeFromTarkov.exe").touch()
+            installation = {"install_path": str(live)}
+            self.app.i_source_var.set("Web release")
+            self.app.i_install_mode_var.set("existing")
+            self.app._catalog_release_details = {
+                "3.11.4": CatalogRelease("3.11.4", "1.1.0.46699")
+            }
+            self.app.i_web_release.configure(values=("choose version", "3.11.4"))
+            self.app.i_web_release_var.set("3.11.4")
+            self.app.i_dest_var.set(str(destination))
+
+            def version(path):
+                return "1.1.0.47000" if Path(path).parent == live else "1.1.0.46699"
+
+            with (
+                mock.patch.object(gui_polished, "query_install", return_value=installation),
+                mock.patch.object(gui_polished, "exe_version", side_effect=version),
+            ):
+                result = self.app._version_preflight()
+
+            self.assertIsNotNone(result)
+            self.assertEqual(result.status, VersionPreflightStatus.READY)
+
+    def test_existing_copy_requires_confirmation_when_live_detection_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "Copy"
+            destination.mkdir()
+            self.app.i_install_mode_var.set("existing")
+            self.app.i_dest_var.set(str(destination))
+            with (
+                mock.patch.object(gui_layout, "query_install", return_value=None),
+                mock.patch.object(gui_layout.messagebox, "askyesno", return_value=False) as confirm,
+                mock.patch.object(
+                    gui_polished.PolishedSierraPatcherGUI,
+                    "_run_install",
+                ) as install,
+            ):
+                gui_layout.LayoutSierraPatcherGUI._run_install(self.app)
+
+            confirm.assert_called_once()
+            install.assert_not_called()
+
     def test_saved_korean_starts_localized_but_stays_withdrawn(self) -> None:
         self.app.destroy()
         i18n.set_language("ko")
@@ -212,7 +300,6 @@ class GuiLanguageSwitchTests(unittest.TestCase):
             live.mkdir()
             destination.mkdir()
             (live / "EscapeFromTarkov.exe").touch()
-            (destination / "EscapeFromTarkov.exe").touch()
 
             self.app.i_source_var.set("Web release")
             self.app._catalog_release_details = {
@@ -226,6 +313,8 @@ class GuiLanguageSwitchTests(unittest.TestCase):
             with (
                 mock.patch.object(gui, "query_install", return_value=installation),
                 mock.patch.object(gui, "exe_version", return_value="1.1.0.46657"),
+                mock.patch.object(gui_layout, "query_install", return_value=installation),
+                mock.patch.object(gui_layout, "exe_version", return_value="1.1.0.46657"),
                 mock.patch.object(gui_polished, "query_install", return_value=installation),
                 mock.patch.object(
                     gui_polished,
@@ -279,6 +368,136 @@ class GuiLanguageSwitchTests(unittest.TestCase):
                     self.app._destination_badge.cget("text"),
                     "본섭 업데이트  ⚠",
                 )
+
+    def test_download_failure_does_not_start_automatic_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            live = root / "Live"
+            destination = root / "SPT"
+            live.mkdir()
+            (live / "EscapeFromTarkov.exe").touch()
+            installation = {"install_path": str(live)}
+            self.app.i_source_var.set("Web release")
+            self.app._catalog_release_details = {
+                "3.11.4": CatalogRelease("3.11.4", "1.1.0.46699")
+            }
+            self.app.i_web_release.configure(values=("choose version", "3.11.4"))
+            self.app.i_web_release_var.set("3.11.4")
+
+            class FailingSource:
+                def __init__(self, *_args, **_kwargs):
+                    pass
+
+                def prepare(self, **_kwargs):
+                    raise RuntimeError("download failed")
+
+            with (
+                mock.patch.object(gui, "query_install", return_value=installation),
+                mock.patch.object(gui, "exe_version", return_value="1.1.0.46699"),
+                mock.patch.object(gui_layout, "query_install", return_value=installation),
+                mock.patch.object(gui_layout, "exe_version", return_value="1.1.0.46699"),
+                mock.patch.object(gui_polished, "query_install", return_value=installation),
+                mock.patch.object(gui_polished, "exe_version", return_value="1.1.0.46699"),
+                mock.patch.object(gui_web, "WebPackageSource", FailingSource),
+                mock.patch.object(gui_web, "copy_live_game") as copy_live_game,
+                mock.patch.object(gui_web.messagebox, "showerror"),
+            ):
+                self.app.i_dest_var.set(str(destination))
+                self.app._run_install()
+                deadline = time.monotonic() + 2
+
+                def wait_for_install():
+                    if not self.app._install_running or time.monotonic() >= deadline:
+                        self.app.quit()
+                    else:
+                        self.app.after(10, wait_for_install)
+
+                self.app.after(10, wait_for_install)
+                self.app.mainloop()
+
+            self.assertFalse(self.app._install_running)
+            copy_live_game.assert_not_called()
+            self.assertFalse(destination.exists())
+
+    def test_automatic_copy_runs_after_package_preparation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            live = root / "Live"
+            destination = root / "SPT"
+            storage = root / "package" / "storage"
+            patch_root = root / "package" / "patchfiles"
+            live.mkdir()
+            storage.mkdir(parents=True)
+            patch_root.mkdir(parents=True)
+            (live / "EscapeFromTarkov.exe").touch()
+            installation = {"install_path": str(live)}
+            order = []
+            self.app.i_source_var.set("Web release")
+            self.app._catalog_release_details = {
+                "3.11.4": CatalogRelease("3.11.4", "1.1.0.46699")
+            }
+            self.app.i_web_release.configure(values=("choose version", "3.11.4"))
+            self.app.i_web_release_var.set("3.11.4")
+            self.app.i_web_cache.delete(0, "end")
+            self.app.i_web_cache.insert(0, str(root / "cache"))
+
+            class PreparedSource:
+                def __init__(self, *_args, **_kwargs):
+                    pass
+
+                def prepare(self, **_kwargs):
+                    order.append("package")
+                    return SimpleNamespace(storage_root=storage, patch_root=patch_root)
+
+            def copy_game(*_args, **_kwargs):
+                order.append("copy")
+                destination.mkdir()
+
+            def apply_patches(*_args, **_kwargs):
+                order.append("patch")
+                return 0, 0, 0
+
+            metadata = SimpleNamespace(
+                version="1.1.0.46699",
+                integrity_folders={},
+                runtime_requirements=None,
+                dependencies=None,
+                title="3.11.4",
+            )
+            with (
+                mock.patch.object(gui, "query_install", return_value=installation),
+                mock.patch.object(gui, "exe_version", return_value="1.1.0.46699"),
+                mock.patch.object(gui_layout, "query_install", return_value=installation),
+                mock.patch.object(gui_layout, "exe_version", return_value="1.1.0.46699"),
+                mock.patch.object(gui_polished, "query_install", return_value=installation),
+                mock.patch.object(gui_polished, "exe_version", return_value="1.1.0.46699"),
+                mock.patch.object(gui_web, "query_install", return_value=installation),
+                mock.patch.object(gui_web, "exe_version", return_value="1.1.0.46699"),
+                mock.patch.object(gui_web, "WebPackageSource", PreparedSource),
+                mock.patch.object(gui_web, "copy_live_game", side_effect=copy_game),
+                mock.patch.object(gui_web, "apply_all_patches", side_effect=apply_patches),
+                mock.patch.object(gui_web.Meta, "read", return_value=metadata),
+                mock.patch.object(gui_web, "missing_requirements_for_metadata", return_value=[]),
+                mock.patch.object(gui_web, "count_patch_files", return_value=0),
+                mock.patch.object(gui_web, "finalize"),
+                mock.patch.object(gui_web, "apply_storage"),
+                mock.patch.object(gui_web.messagebox, "showinfo"),
+            ):
+                self.app.i_dest_var.set(str(destination))
+                self.app._run_install()
+                deadline = time.monotonic() + 2
+
+                def wait_for_install():
+                    if not self.app._install_running or time.monotonic() >= deadline:
+                        self.app.quit()
+                    else:
+                        self.app.after(10, wait_for_install)
+
+                self.app.after(10, wait_for_install)
+                self.app.mainloop()
+
+            self.assertFalse(self.app._install_running)
+            self.assertEqual(order, ["package", "copy", "patch"])
 
     def test_preflight_statuses_use_compact_display(self) -> None:
         self.assertEqual(int(self.app._dest_hint.grid_info()["columnspan"]), 3)

@@ -18,6 +18,7 @@ from .gui_catalog import CatalogSierraPatcherGUI
 from .i18n import canonical_choice, tr
 from .paths import WORKING_DIR
 from .registry import exe_version, query_install
+from .release_metadata_probe import probe_archived_live_version
 from .version_preflight import (
     VersionPreflightResult,
     VersionPreflightStatus,
@@ -177,23 +178,41 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
         return (self.i_dest_var.get() or "").strip()
 
     def _version_preflight(self) -> VersionPreflightResult | None:
-        if canonical_choice(self.i_source_var.get(), gui_web.PACKAGE_SOURCES) != "Web release":
-            return None
-
-        release_id = self.i_web_release_var.get().strip()
-        if (
-            not release_id
-            or canonical_choice(release_id, (CATALOG_PLACEHOLDER,)) == CATALOG_PLACEHOLDER
-            or release_id not in tuple(self.i_web_release.cget("values"))
-        ):
+        source_mode = canonical_choice(self.i_source_var.get(), gui_web.PACKAGE_SOURCES)
+        release_probe_loading = False
+        if source_mode == "Web release":
+            release_id = self.i_web_release_var.get().strip()
+            if (
+                not release_id
+                or canonical_choice(release_id, (CATALOG_PLACEHOLDER,)) == CATALOG_PLACEHOLDER
+                or release_id not in tuple(self.i_web_release.cget("values"))
+            ):
+                return None
+            required_version = self._selected_required_live_version()
+            release_probe_loading = self._selected_release_probe_loading()
+        elif source_mode == "Archived snapshot":
+            archive_var = getattr(self, "i_archive_path_var", None)
+            archive_path = archive_var.get().strip() if archive_var is not None else ""
+            if not archive_path:
+                return None
+            try:
+                required_version = probe_archived_live_version(archive_path)
+            except Exception:
+                required_version = None
+        else:
             return None
 
         destination = self._destination_for_preflight()
-        if not destination or not Path(destination).is_dir():
+        automatic_copy_reader = getattr(self, "_automatic_copy_enabled", None)
+        automatic_copy = bool(
+            automatic_copy_reader()
+            if callable(automatic_copy_reader)
+            else False
+        )
+        if not destination or (not automatic_copy and not Path(destination).is_dir()):
             return None
 
-        required_version = self._selected_required_live_version()
-        if self._selected_release_probe_loading():
+        if release_probe_loading:
             return VersionPreflightResult(
                 VersionPreflightStatus.VERSION_CHECKING,
                 None,
@@ -212,6 +231,13 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
         except Exception:
             pass
 
+        if automatic_copy:
+            return evaluate_version_preflight(
+                required_version,
+                live_version,
+                live_version,
+            )
+
         destination_version = None
         try:
             destination_executable = Path(destination) / "EscapeFromTarkov.exe"
@@ -220,7 +246,14 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
         except Exception:
             pass
 
-        return evaluate_version_preflight(
+        if destination_version is None:
+            status = VersionPreflightStatus.VERSION_UNKNOWN
+        elif destination_version == required_version:
+            status = VersionPreflightStatus.READY
+        else:
+            status = VersionPreflightStatus.SOURCE_MISMATCH
+        return VersionPreflightResult(
+            status,
             required_version,
             live_version,
             destination_version,
@@ -313,7 +346,12 @@ class PolishedSierraPatcherGUI(CatalogSierraPatcherGUI):
             return None
 
         destination = self._destination_for_preflight()
-        destination_ready = bool(destination and Path(destination).is_dir())
+        destination_validator = getattr(self, "_destination_ready_for_install", None)
+        destination_ready = (
+            bool(destination_validator())
+            if callable(destination_validator)
+            else bool(destination and Path(destination).is_dir())
+        )
         self._set_badge(self._destination_badge, destination_ready)
         if not destination_ready:
             self._dest_hint.configure(foreground=self._REQUIRED_FG)

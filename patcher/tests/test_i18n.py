@@ -67,7 +67,7 @@ class I18nTests(unittest.TestCase):
         self.assertEqual(i18n.tr("Install"), "설치")
         self.assertEqual(
             i18n.tr("Live Tarkov Folder"),
-            "라이브 타르코프 폴더",
+            "본섭 타르코프 폴더",
         )
         self.assertEqual(
             i18n.tr("Web release: {release}", release="4.0.1"),

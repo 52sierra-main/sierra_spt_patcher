@@ -235,8 +235,18 @@ class CatalogSierraPatcherGUI(IntegratedSierraPatcherGUI):
         if not hasattr(self, "i_web_release_var"):
             return super()._validate_install_ready()
 
-        destination = (self.i_dest_var.get() or "").strip()
-        valid_destination = bool(destination and Path(destination).is_dir())
+        destination_reader = getattr(self, "_destination_value", None)
+        destination = (
+            destination_reader()
+            if callable(destination_reader)
+            else (self.i_dest_var.get() or "").strip()
+        )
+        destination_validator = getattr(self, "_destination_ready_for_install", None)
+        valid_destination = (
+            bool(destination_validator())
+            if callable(destination_validator)
+            else bool(destination and Path(destination).is_dir())
+        )
         web_mode = canonical_choice(self.i_source_var.get(), gui_web.PACKAGE_SOURCES) == "Web release"
         release = self.i_web_release_var.get().strip()
         valid_release = not web_mode or bool(
