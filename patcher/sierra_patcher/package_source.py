@@ -9,6 +9,7 @@ from .web_download import (
     DEFAULT_DOWNLOAD_WORKERS,
     DEFAULT_MATERIALIZE_WORKERS,
     MaterializedPackage,
+    is_storage_path,
     materialize_web_package,
 )
 
@@ -62,6 +63,28 @@ class WebPackageSource:
         self.cache_root = Path(cache_root)
         self.download_workers = download_workers
         self.materialize_workers = materialize_workers
+
+    def prepare_storage(
+        self,
+        on_progress: Callable[[str, int, int, str], None] | None = None,
+        cancel_event=None,
+    ) -> Path:
+        """Fetch only the package's small ``storage/`` tree.
+
+        This is roughly 1/5000th of a release and carries source_hashes.json, so
+        the destination can be verified before the full download is started.
+        """
+
+        materialized: MaterializedPackage = materialize_web_package(
+            self.package_id,
+            self.cache_root,
+            download_workers=self.download_workers,
+            materialize_workers=self.materialize_workers,
+            on_progress=on_progress,
+            cancel_event=cancel_event,
+            path_filter=is_storage_path,
+        )
+        return materialized.storage_root
 
     def prepare(
         self,

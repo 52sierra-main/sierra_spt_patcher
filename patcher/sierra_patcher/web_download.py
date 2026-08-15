@@ -595,6 +595,12 @@ def _materialize_files(
                 )
 
 
+def is_storage_path(relative: Path) -> bool:
+    """True for the small metadata tree (source hashes, delete list, metadata)."""
+    parts = relative.parts
+    return bool(parts) and parts[0] == "storage"
+
+
 def materialize_web_package(
     package_id: str,
     cache_root: str | Path,
@@ -603,7 +609,17 @@ def materialize_web_package(
     materialize_workers: int = DEFAULT_MATERIALIZE_WORKERS,
     on_progress: Callable[[str, int, int, str], None] | None = None,
     cancel_event=None,
+    path_filter: Callable[[Path], bool] | None = None,
 ) -> MaterializedPackage:
+    """Download and reconstruct a package, or a subset of it.
+
+    ``path_filter`` restricts the work to the package files it accepts. This
+    exists so the installer can fetch the ~1.5 MB ``storage/`` tree on its own
+    and verify the destination before committing to a multi-GB download. Objects
+    are cached by content hash, so a later full call reuses everything already
+    fetched instead of downloading it twice.
+    """
+
     _raise_if_cancelled(cancel_event)
     cache_root = Path(cache_root).resolve()
     if on_progress:
@@ -613,6 +629,15 @@ def materialize_web_package(
         on_progress("web:manifest", 1, 1, "Manifest ready")
 
     files, objects_by_id = _parse_manifest(manifest)
+
+    if path_filter is not None:
+        files = [spec for spec in files if path_filter(spec.path)]
+        objects_by_id = {
+            object_spec.object_id: object_spec.size
+            for spec in files
+            for object_spec in spec.objects
+        }
+
     object_cache = cache_root / "objects"
     package_root = cache_root / "packages" / _package_id(package_id)
     _mkdir(package_root)
