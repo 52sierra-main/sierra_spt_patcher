@@ -45,12 +45,21 @@ The installer may spend some time on stages such as:
 
 ```text
 Preparing installation
+Checking your Tarkov copy
+Verifying source files
 Downloading objects
 Reconstructing package
-Verifying source files
 Applying patches
 Applying storage
 ```
+
+**Sierra Installer checks your Tarkov copy before it downloads anything.** It only needs
+about 5 MB to do this. If your copy is not the right one, it stops there and
+tells you, without downloading the whole release and without changing a single
+file in your folder.
+
+The check itself takes a minute or two, because Sierra reads every file the
+patch needs. That is normal, even though nothing appears to be downloading.
 
 This can take a while, especially on slower drives. **Do not close Sierra Installer while it is working.**
 
@@ -121,14 +130,19 @@ Matched: 1569
 Mismatched: 3828
 ```
 
+**Nothing in your folder was changed.** This check runs before Sierra downloads
+the release and before it touches any of your files, so you have lost nothing but
+a couple of minutes.
+
 Do not continue using that copy.
 
-1. Delete the failed SPT destination folder.
+1. Delete the SPT destination folder you selected.
 2. Verify/update the official Live Tarkov installation.
 3. Make a **fresh copy** of Live Tarkov.
 4. Run the installer again using the new copy.
 
-Do **not** repeatedly retry the same failed destination.
+Do **not** repeatedly retry the same failed destination. The result will be
+exactly the same every time.
 
 ---
 
@@ -144,11 +158,18 @@ ZSTD_FAILURE
 
 This usually means the selected Tarkov copy does not match the files the patch expects.
 
+This should now be rare, because Sierra checks your files before it starts
+patching. If you see it anyway, something unusual happened and support wants to
+know about it.
+
+Sierra also stops on its own after 25 of these errors instead of continuing
+through thousands of files, so the damage is kept small.
+
 **If the installer had already started Applying patches, do not run the installer again on the same folder.** Some files may already have been changed.
 
 Delete that destination, make a fresh Tarkov copy, and try again.
 
-If a fresh copy fails in exactly the same way, send the Logs to support.
+If a fresh copy fails in exactly the same way, send your log file to support.
 
 ---
 
@@ -189,17 +210,28 @@ If there has been no new log activity for a long time, copy the Logs and contact
 
 For a download/package preparation failure, you can normally reopen Sierra and try the download again because verified cache files can be reused.
 
+Note that if your Tarkov copy was the problem, Sierra will have told you before
+the download even started, so a download failure is a separate issue.
+
 However, if the failure happened **after `Applying patches` started**, do not reuse the destination folder. Make a fresh Tarkov copy first.
 
 ---
 
 ## What does Force do?
 
-**Force bypasses compatibility/safety checks. It is not a normal installation option.**
+**Force is not a normal installation option.** You should not need it.
 
-Using Force with the wrong Tarkov files can result in a broken or partially patched installation.
+Force skips two checks that can sometimes be wrong:
 
-Only use **Force** when you understand why a check is failing or when support specifically asks you to use it.
+- the **version number** check, because Tarkov's version number does not always change when the game files do
+- the **folder size** check, which is only a rough guess
+
+**Force does not skip the file check.** Sierra always compares your files against the exact files the patch needs, and Force cannot turn that off. This is on
+purpose: if those files do not match, the patch physically cannot work, so letting you continue would only break your folder.
+
+In short: Force can get you past a warning that might be a false alarm. It cannot get you past a real problem, and it will not make a wrong Tarkov copy work.
+
+Only use **Force** when you understand why a check is failing, or when support asks you to.
 
 ---
 
@@ -213,13 +245,23 @@ Do not try to repair a half-patched folder by running Sierra Installer repeatedl
 
 # What to send when asking for help
 
-Please include:
+**The easiest and most useful thing you can send is the log file.**
+
+Go to the **Logs** tab and click **Save log to file...**, then send us that file.
+It already contains your PC details, the version you chose, the folder you
+selected, your settings, and everything Sierra did, with times. That answers
+almost every question we would otherwise have to ask you.
+
+There is also an **Open log folder** button if you would rather find the files
+yourself. Sierra keeps the last 10.
+
+If you cannot send the file, please include:
 
 - A screenshot of the error.
-- The contents of the **Logs** tab, preferably from the beginning of the failure.
 - The SPT version you selected.
 - Whether you used **Web release** or **Archived snapshot**.
 - Whether the destination was a **fresh copy of Live Tarkov**.
+- Whether **Force** was ticked.
 - Whether another network or VPN changes the problem, if the failure is download-related.
 
 Support:
