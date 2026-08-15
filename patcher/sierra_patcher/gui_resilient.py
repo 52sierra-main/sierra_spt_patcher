@@ -6,7 +6,11 @@ from . import gui_web, patch_apply
 from .gui import _hide_console_on_windows
 from .gui_layout import LayoutSierraPatcherGUI
 from .hygiene import is_volatile_runtime_file
-from .patch_apply import PatchApplyError, apply_patches_resilient
+from .patch_apply import (
+    DEFAULT_ABORT_AFTER_SOURCE_FAILURES,
+    PatchApplyError,
+    apply_patches_resilient,
+)
 
 
 _BASE_APPLY_SINGLE_DETAILED = patch_apply._apply_single_detailed
@@ -75,6 +79,7 @@ class ResilientSierraPatcherGUI(LayoutSierraPatcherGUI):
             **kwargs,
             retry_attempts=2,
             retry_delay_seconds=0.75,
+            abort_after=DEFAULT_ABORT_AFTER_SOURCE_FAILURES,
             on_progress=progress,
             on_log=self._log,
         )

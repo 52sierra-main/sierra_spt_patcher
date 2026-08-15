@@ -23,12 +23,47 @@ from .zstd_patch import (
 
 
 RETRYABLE_FAILURE_CODES = {
-    "ZSTD_FAILURE",
+    "ZSTD_IO",
     "EMPTY_OUTPUT",
     "REPLACE_FAILURE",
     "IO_FAILURE",
     "UNEXPECTED",
 }
+
+# Failures that prove the destination is not the source this release was built
+# against. They are fully determined by the input bytes, so neither retrying nor
+# continuing through the remaining patches can change the outcome.
+FATAL_SOURCE_FAILURE_CODES = {
+    "ZSTD_SOURCE_MISMATCH",
+    "MISSING_SOURCE",
+}
+
+# Number of fatal source failures tolerated before the first pass gives up.
+# Below this, a release-side defect affecting a handful of patches still reports
+# its complete failure list. Above it, the destination is simply the wrong build
+# and every additional applied patch only damages the user's folder further.
+DEFAULT_ABORT_AFTER_SOURCE_FAILURES = 25
+
+# zstd reports both of these as "Decoding error (36)". Either one means the
+# reference file handed to --patch-from is not the file the delta was built
+# from: the frame either decoded to the wrong bytes or referenced an offset the
+# reference cannot satisfy. Running the identical command again cannot help.
+_SOURCE_MISMATCH_MARKERS = (
+    "doesn't match checksum",
+    "does not match checksum",
+    "corruption detected",
+)
+
+
+def _classify_zstd_failure(detail: str) -> str:
+    """Split zstd's single exit code into deterministic vs transient causes."""
+
+    text = str(detail or "").lower().replace("’", "'")
+    if any(marker in text for marker in _SOURCE_MISMATCH_MARKERS):
+        return "ZSTD_SOURCE_MISMATCH"
+    # Read errors, sharing violations and unknown causes stay retryable: an
+    # antivirus or indexer holding the file usually releases it within a second.
+    return "ZSTD_IO"
 
 
 @dataclass(frozen=True)
@@ -56,6 +91,8 @@ class PatchApplyReport:
     succeeded: int
     failures: tuple[PatchFailure, ...]
     recovered_on_retry: int = 0
+    not_attempted: int = 0
+    aborted_early: bool = False
 
     @property
     def failed(self) -> int:
@@ -146,11 +183,12 @@ def _apply_single_detailed(
                     cancel_event=cancel_event,
                 )
             except subprocess.CalledProcessError as exc:
+                detail = _called_process_detail(exc)
                 return _failure(
                     patch_file,
                     relative_text,
-                    "ZSTD_FAILURE",
-                    f"zstd exit {exc.returncode}: {_called_process_detail(exc)}",
+                    _classify_zstd_failure(detail),
+                    f"zstd exit {exc.returncode}: {detail}",
                 )
 
             if (
@@ -218,11 +256,12 @@ def _apply_single_detailed(
                 cancel_event=cancel_event,
             )
         except subprocess.CalledProcessError as exc:
+            detail = _called_process_detail(exc)
             return _failure(
                 patch_file,
                 relative_text,
-                "ZSTD_FAILURE",
-                f"zstd exit {exc.returncode}: {_called_process_detail(exc)}",
+                _classify_zstd_failure(detail),
+                f"zstd exit {exc.returncode}: {detail}",
             )
 
         if (
@@ -297,23 +336,50 @@ def _run_attempt_batch(
     on_progress=None,
     phase: str,
     progress_message: str,
-) -> list[PatchAttemptResult]:
+    abort_after: int = 0,
+) -> tuple[list[PatchAttemptResult], bool]:
+    """Run one apply pass. Returns (results, aborted_early).
+
+    When ``abort_after`` is positive, the pass stops once that many fatal source
+    failures have been seen. Workers already running are allowed to finish and
+    their results are still collected so the report stays accurate.
+    """
+
     if not patch_files:
-        return []
+        return [], False
 
     results: list[PatchAttemptResult] = []
     completed = 0
     max_workers = max(1, min(int(workers), len(patch_files)))
 
+    # The abort has to be visible to the workers, not just to this loop. Every
+    # patch is submitted up front, so by the time the consumer has counted N
+    # fatal results the pool may already have burned through thousands more.
+    # Queued workers check this event first and return without touching a file,
+    # which bounds the overrun to roughly one task per worker.
+    abort_event = threading.Event()
+    fatal_lock = threading.Lock()
+    fatal_seen = 0
+
+    def guarded_apply(patch_file: Path) -> PatchAttemptResult | None:
+        nonlocal fatal_seen
+        if abort_event.is_set():
+            return None
+
+        # Resolved from module globals on purpose: gui_resilient replaces
+        # _apply_single_detailed to skip volatile runtime files.
+        result = _apply_single_detailed(patch_file, destination, patch_root, cancel_event)
+
+        if not result.ok and result.code in FATAL_SOURCE_FAILURE_CODES:
+            with fatal_lock:
+                fatal_seen += 1
+                if abort_after and fatal_seen >= abort_after:
+                    abort_event.set()
+        return result
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
-            executor.submit(
-                _apply_single_detailed,
-                patch_file,
-                destination,
-                patch_root,
-                cancel_event,
-            ): patch_file
+            executor.submit(guarded_apply, patch_file): patch_file
             for patch_file in patch_files
         }
 
@@ -330,6 +396,11 @@ def _run_attempt_batch(
                     pending.cancel()
                 raise
 
+            # Skipped by the abort guard: this patch was never attempted, so it
+            # is neither a success nor a failure.
+            if result is None:
+                continue
+
             results.append(result)
             completed += 1
             if on_progress is not None:
@@ -340,7 +411,7 @@ def _run_attempt_batch(
                     f"{progress_message} {completed}/{len(patch_files)}",
                 )
 
-    return results
+    return results, abort_event.is_set()
 
 
 def apply_patches_resilient(
@@ -353,6 +424,7 @@ def apply_patches_resilient(
     retry_attempts: int = 2,
     retry_delay_seconds: float = 0.75,
     on_log: Callable[[str], None] | None = None,
+    abort_after: int = DEFAULT_ABORT_AFTER_SOURCE_FAILURES,
 ) -> PatchApplyReport:
     """Apply patches with isolated retries and detailed failure reporting.
 
@@ -360,6 +432,10 @@ def apply_patches_resilient(
     potentially transient reason are retried. Successful files are never
     re-applied, which is important because each delta expects the original
     Live file as its reference.
+
+    The pass stops early once ``abort_after`` fatal source failures prove the
+    destination is the wrong build, so a doomed run damages as few files as
+    possible instead of rewriting thousands before giving up.
     """
 
     destination = Path(dest_dir)
@@ -367,6 +443,7 @@ def apply_patches_resilient(
     patch_files = sorted(patch_root_path.rglob("*.zst"))
     total = len(patch_files)
     retry_attempts = max(0, int(retry_attempts))
+    abort_after = max(0, int(abort_after))
 
     if not patch_files:
         _emit_log(on_log, "[patch] no .zst patches found")
@@ -374,13 +451,14 @@ def apply_patches_resilient(
 
     _emit_log(
         on_log,
-        f"[patch] applying {total} patch(es) with {max(1, int(workers))} worker(s)",
+        f"[patch] applying {total} patch(es) with {max(1, int(workers))} worker(s)"
+        + (f"; aborting after {abort_after} source mismatches" if abort_after else ""),
     )
 
     history: dict[Path, list[PatchAttemptResult]] = {path: [] for path in patch_files}
     current: dict[Path, PatchAttemptResult] = {}
 
-    first_results = _run_attempt_batch(
+    first_results, aborted_early = _run_attempt_batch(
         patch_files,
         destination=destination,
         patch_root=patch_root_path,
@@ -389,6 +467,7 @@ def apply_patches_resilient(
         on_progress=on_progress,
         phase="install:patch",
         progress_message="applied",
+        abort_after=abort_after,
     )
 
     for result in first_results:
@@ -401,16 +480,33 @@ def apply_patches_resilient(
                 f"[{result.code}] {result.detail}",
             )
 
+    attempted = len(current)
     initial_failures = [result for result in current.values() if not result.ok]
     if initial_failures:
         _emit_log(
             on_log,
-            f"[patch] initial pass complete: {total - len(initial_failures)} succeeded, "
-            f"{len(initial_failures)} failed",
+            f"[patch] initial pass complete: {attempted - len(initial_failures)} succeeded, "
+            f"{len(initial_failures)} failed"
+            + (f", {total - attempted} not attempted" if total > attempted else ""),
+        )
+
+    if aborted_early:
+        _emit_log(
+            on_log,
+            f"[patch] ABORTED EARLY: {abort_after}+ patches reported that the destination "
+            "file is not the source this release was built from.",
+        )
+        _emit_log(
+            on_log,
+            "[patch] The remaining patches were not attempted because they would fail "
+            "identically. This destination is a different Tarkov build than the release "
+            "expects; make a fresh copy of Live Tarkov instead of reusing this folder.",
         )
 
     recovered = 0
     for retry_index in range(1, retry_attempts + 1):
+        if aborted_early:
+            break
         retryable = [
             result.patch_file
             for result in current.values()
@@ -427,7 +523,7 @@ def apply_patches_resilient(
         )
         _wait_for_retry(cancel_event, delay)
 
-        retry_results = _run_attempt_batch(
+        retry_results, _ = _run_attempt_batch(
             retryable,
             destination=destination,
             patch_root=patch_root_path,
@@ -477,12 +573,18 @@ def apply_patches_resilient(
             )
         )
 
-    succeeded = total - len(failures)
+    # Derive from real results rather than total-minus-failures: after an early
+    # abort the unattempted patches are neither successes nor failures.
+    succeeded = sum(1 for result in current.values() if result.ok)
+    not_attempted = max(0, total - len(current))
+
     if failures:
         _emit_log(
             on_log,
             f"[patch] FINAL RESULT: {succeeded}/{total} succeeded, "
-            f"{len(failures)} failed after automatic retry handling",
+            f"{len(failures)} failed"
+            + (f", {not_attempted} not attempted" if not_attempted else "")
+            + " after automatic retry handling",
         )
         for failure in failures:
             _emit_log(on_log, f"[patch] FINAL FAILURE: {failure.relative_path}")
@@ -506,6 +608,8 @@ def apply_patches_resilient(
         succeeded=succeeded,
         failures=tuple(failures),
         recovered_on_retry=recovered,
+        not_attempted=not_attempted,
+        aborted_early=aborted_early,
     )
 
 
@@ -513,11 +617,29 @@ def format_patch_failure_summary(report: PatchApplyReport, max_items: int = 5) -
     if not report.failures:
         return f"All {report.total} patches applied successfully."
 
-    lines = [
-        f"Patch stage incomplete: {report.failed}/{report.total} patch(es) could not be applied.",
-        "Automatic retries were attempted for transient failures.",
-        "",
-    ]
+    if report.aborted_early:
+        lines = [
+            "Installation stopped early: the selected folder is not the Tarkov build "
+            "this release was built from.",
+            "",
+            f"Checked before stopping: {report.succeeded + report.failed} of {report.total}",
+            f"Mismatched: {report.failed}",
+            "",
+            "Sierra stopped instead of continuing so that as few files as possible were "
+            "changed. This destination can no longer be used.",
+            "",
+            "Delete this folder, make a fresh copy of your Live Tarkov installation, and "
+            "run the installer again on the new copy.",
+            "",
+            "Examples:",
+        ]
+    else:
+        lines = [
+            f"Patch stage incomplete: {report.failed}/{report.total} patch(es) could not be applied.",
+            "Automatic retries were attempted for transient failures.",
+            "",
+        ]
+
     for failure in report.failures[:max_items]:
         lines.append(f"- {failure.relative_path}")
         lines.append(f"  {failure.code}: {failure.detail}")
