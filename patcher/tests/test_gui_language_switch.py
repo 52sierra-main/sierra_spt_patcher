@@ -80,7 +80,8 @@ class GuiLanguageSwitchTests(unittest.TestCase):
         destination = r"X:\Friend\Tarkov"
         self.app.i_dest_var.set(destination)
         self.app.i_force.set(True)
-        self.app.log_text.insert("end", "language-state-sentinel\n")
+        # The log widget is read-only now; go through the normal append path.
+        self.app._append_log("language-state-sentinel")
         log_before = self.app.log_text.get("1.0", "end-1c")
         self.app._detail_var.set("3/9 objects cached")
         self.app.i_web_release.configure(
