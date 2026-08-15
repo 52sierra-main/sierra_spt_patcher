@@ -741,8 +741,15 @@ class IntegratedSierraPatcherGUI(SierraPatcherGUI):
 
         cache_root = Path(self.i_web_cache.get().strip() or (Path(WORKING_DIR) / "web_cache"))
         self._cancel = threading.Event()
+        # Reset per run: set once the source files have been verified, so the
+        # patch stage does not repeat a check this run has already passed.
+        self._source_preflight_done = False
         if not self._begin_install_run():
             return
+
+        # Stamp the run's full configuration before any work starts, so a log
+        # sent to support answers the "what was your setup?" questions itself.
+        self._log_install_header(destination=destination)
 
         try:
             check_resources()
@@ -760,6 +767,29 @@ class IntegratedSierraPatcherGUI(SierraPatcherGUI):
                         download_workers=download_workers,
                         materialize_workers=materialize_workers,
                     )
+
+                    # Check the destination before committing to the download.
+                    # storage/ is roughly 1/5000th of a release but carries
+                    # source_hashes.json, so a wrong folder is rejected in
+                    # seconds instead of after several GB have been fetched.
+                    verify = getattr(self, "_verify_source_files", None)
+                    if verify is not None:
+                        self._set_phase("Checking your Tarkov copy")
+                        storage_root = source.prepare_storage(
+                            on_progress=self._web_progress_callback(),
+                            cancel_event=self._cancel,
+                        )
+                        if not verify(
+                            storage_root,
+                            destination,
+                            patch_workers,
+                            self._cancel,
+                        ):
+                            self._log("[install] stopped before download: source files mismatch")
+                            return
+                        if self._cancel.is_set():
+                            return
+
                     layout = source.prepare(
                         on_progress=self._web_progress_callback(),
                         cancel_event=self._cancel,
