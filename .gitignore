@@ -13,3 +13,10 @@ __pycache__/
 /patchfiles/
 /storage/
 /additional_files/
+
+# Runtime output beside the app. These are created in WORKING_DIR, which is the
+# patcher/ folder when running from source and the exe's folder when frozen, so
+# the patterns are deliberately not anchored to the repository root.
+logs/
+web_cache/
+web_repo_output/

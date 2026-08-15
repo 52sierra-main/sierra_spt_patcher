@@ -36,6 +36,7 @@ from .i18n import (
     tr_progress,
 )
 from .prereqs import format_missing_requirements, missing_requirements_for_metadata
+from .session_log import free_space, session_log
 from . import proc
 
 DIFF_PRESETS = {
@@ -70,6 +71,10 @@ def _safe_call(widget, func, *args, **kwargs):
 # GUI
 # -----------------------------
 class SierraPatcherGUI(tk.Tk):
+    # The Logs tab keeps only the most recent lines; the on-disk session log is
+    # complete and is what the Save/Copy buttons hand to support.
+    _LOG_WIDGET_MAX_LINES = 4000
+
     def __init__(self, dev: bool = False):
         startup_language = current_language()
         if startup_language != DEFAULT_LANGUAGE:
@@ -1014,23 +1019,144 @@ class SierraPatcherGUI(tk.Tk):
         f = ttk.Frame(nb)
         f.rowconfigure(0, weight=1)
         f.columnconfigure(0, weight=1)
-        self.log_text = ScrolledText(f, state="normal", wrap="word")
+        # Read-only: users were typing into the log widget and sending those
+        # edits to support. A disabled Text still allows selection and Ctrl+C.
+        self.log_text = ScrolledText(f, state="disabled", wrap="word")
         self.log_text.grid(row=0, column=0, sticky="nsew", padx=8, pady=2)
+
+        actions = ttk.Frame(f)
+        actions.grid(row=1, column=0, sticky="ew", padx=8, pady=(2, 4))
+        ttk.Button(actions, text=tr("Save log to file..."), command=self._save_log).pack(side="left")
+        ttk.Button(actions, text=tr("Copy log"), command=self._copy_log).pack(side="left", padx=6)
+        ttk.Button(actions, text=tr("Open log folder"), command=self._open_log_folder).pack(side="left")
+
+        log_path = session_log().path
+        self._log_path_var = tk.StringVar(
+            value=str(log_path) if log_path else tr("Log file unavailable (this session only)")
+        )
+        ttk.Label(f, textvariable=self._log_path_var, foreground="#666", wraplength=900).grid(
+            row=2, column=0, sticky="w", padx=8, pady=(0, 6)
+        )
+
+        # The on-disk log keeps everything; the widget keeps only the tail so a
+        # very large failure list cannot make the Logs tab unusable.
+        session_log().add_sink(self._log_sink)
         return f
-    
+
+    def _log_sink(self, line: str) -> None:
+        _safe_call(self, self._append_log, line)
+
+    def destroy(self):
+        # Each window registers its own bound sink; drop it so a replaced or
+        # closed window cannot keep receiving lines.
+        try:
+            session_log().remove_sink(self._log_sink)
+        except Exception:
+            pass
+        return super().destroy()
+
     def _append_log(self, msg: str):
         try:
+            self.log_text.configure(state="normal")
             self.log_text.insert("end", msg + "\n")
+
+            line_count = int(self.log_text.index("end-1c").split(".")[0])
+            if line_count > self._LOG_WIDGET_MAX_LINES:
+                self.log_text.delete("1.0", f"{line_count - self._LOG_WIDGET_MAX_LINES}.0")
+
             self.log_text.see("end")
         except Exception:
             pass
+        finally:
+            try:
+                self.log_text.configure(state="disabled")
+            except Exception:
+                pass
 
     def _log(self, *parts):
-        _safe_call(self, self._append_log, " ".join(str(p) for p in parts))
+        session_log().write(" ".join(str(p) for p in parts))
 
     def _log_exc(self, prefix="Error"):
         tb = "".join(traceback.format_exc())
-        _safe_call(self, self._append_log, f"{prefix}:\n{tb}")
+        session_log().write(f"{prefix}:\n{tb}")
+
+    # ---------- log export ----------
+
+    def _log_contents(self) -> str:
+        """Prefer the on-disk log; it retains lines trimmed from the widget."""
+        path = session_log().path
+        if path is not None:
+            try:
+                return Path(path).read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+        try:
+            return self.log_text.get("1.0", "end-1c")
+        except Exception:
+            return ""
+
+    def _save_log(self):
+        contents = self._log_contents()
+        if not contents.strip():
+            messagebox.showinfo(tr("Logs"), tr("There is nothing to save yet."))
+            return
+        target = filedialog.asksaveasfilename(
+            title=tr("Save log to file"),
+            defaultextension=".txt",
+            initialfile=f"sierra-log-{_dt.datetime.now().strftime('%Y%m%d-%H%M%S')}.txt",
+            filetypes=[("Text files", "*.txt"), ("Log files", "*.log"), ("All files", "*.*")],
+        )
+        if not target:
+            return
+        try:
+            Path(target).write_text(contents, encoding="utf-8")
+        except Exception as exc:
+            messagebox.showerror(tr("Logs"), tr("Could not save the log:\n{error}", error=exc))
+            return
+        messagebox.showinfo(tr("Logs"), tr("Log saved to:\n{path}", path=target))
+
+    def _copy_log(self):
+        contents = self._log_contents()
+        if not contents.strip():
+            messagebox.showinfo(tr("Logs"), tr("There is nothing to copy yet."))
+            return
+        copy_to_clipboard(self, contents)
+
+    def _open_log_folder(self):
+        path = session_log().path
+        if path is None:
+            messagebox.showinfo(tr("Logs"), tr("No log file could be created for this session."))
+            return
+        try:
+            os.startfile(str(Path(path).parent))  # Windows
+        except Exception:
+            pass
+
+    def _log_install_header(self, **overrides) -> None:
+        """Record everything support currently has to ask the user for by hand."""
+
+        def value(name, default="—"):
+            try:
+                attribute = getattr(self, name, None)
+                return default if attribute is None else attribute.get()
+            except Exception:
+                return default
+
+        destination = overrides.pop("destination", None) or value("i_dest_var", "")
+        fields = {
+            "Source mode": value("i_source_var"),
+            "Release": value("i_web_release_var", "—"),
+            "Destination": destination or "—",
+            "Destination free": free_space(destination) if destination else "—",
+            "Archived snapshot": value("i_archive_path_var", "—") or "—",
+            "Cache directory": value("i_web_cache"),
+            "Force enabled": value("i_force", False),
+            "Patch workers": value("i_threads"),
+            "Download workers": value("i_download_workers"),
+            "Reconstruction workers": value("i_materialize_workers"),
+        }
+        fields.update(overrides)
+        session_log().write_section("Install run", fields)
 
 
     def _row(self, parent, r, label, entry_widget, browse=None, required=False):
