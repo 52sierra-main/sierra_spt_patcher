@@ -135,6 +135,7 @@ def enable_source_integrity_hooks() -> None:
         cancel_event=None,
         *,
         mark_verified: bool = True,
+        post_copy: bool = False,
     ):
         def progress(_phase, current, total, message):
             self._set_phase("Verifying source files")
@@ -163,10 +164,17 @@ def enable_source_integrity_hooks() -> None:
             )
             for mismatch in report.mismatches:
                 self._log(f"[integrity] {describe_source_mismatch(mismatch)}")
-            self._stop_with_message(
-                "Source files mismatch",
-                format_source_integrity_summary(report),
-            )
+
+            summary = format_source_integrity_summary(report)
+            if post_copy:
+                # Automatic Copy has created files in the destination, so the
+                # normal "No game files were modified" sentence would be
+                # misleading. No patches have been applied at this point.
+                unchanged_notice = gui_web.tr("No game files were modified.")
+                summary = "\n".join(
+                    line for line in summary.splitlines() if line != unchanged_notice
+                )
+            self._stop_with_message("Source files mismatch", summary)
             self._cancel.set()
             return False, report
 
@@ -182,9 +190,10 @@ def enable_source_integrity_hooks() -> None:
         """Verify the source that will actually feed the delta patches.
 
         For Automatic Copy, the detected Live install is verified first, copied,
-        then the newly-created destination is independently verified. This second
-        pass intentionally catches copy-time interference or corruption before
-        the multi-GB package download and before any patch is applied.
+        then the newly-created destination is independently verified. The copy
+        engine itself verifies every copied file; the second source-hash pass
+        additionally proves that the destination still matches this release's
+        exact delta inputs before the full package download begins.
         """
 
         _ensure_run_state(self)
@@ -206,8 +215,6 @@ def enable_source_integrity_hooks() -> None:
             )
             return ok
 
-        # If this exact destination was already verified after the automatic copy,
-        # a later patch-stage call has nothing useful to repeat.
         if _path_key(destination) == self._source_preflight_verified_root:
             self._log(
                 "[integrity] copied destination already passed exact source verification; "
@@ -233,12 +240,44 @@ def enable_source_integrity_hooks() -> None:
         live_path = installation["install_path"]
         live_executable = Path(live_path) / "EscapeFromTarkov.exe"
         source_version = gui_web.exe_version(live_executable)
+
+        try:
+            storage_meta = gui_web.Meta.read(storage_root)
+            required_version = storage_meta.version
+        except Exception:
+            required_version = None
+
         if not self._install_mode_logged:
             self._install_mode_logged = True
             self._log(
                 f"[install] install mode=automatic copy live={live_path} "
-                f"live_version={source_version or '-'} destination={destination}"
+                f"live_version={source_version or '-'} required_version={required_version or '-'} "
+                f"destination={destination}"
             )
+
+        # The storage-only fetch includes metadata.info, so preserve PR3's cheap
+        # version guard even when the catalog entry was legacy/unverified. Force
+        # may bypass this heuristic, but not the exact SHA-256 check below.
+        try:
+            force = bool(self.i_force.get())
+        except Exception:
+            force = False
+        if (
+            not force
+            and required_version
+            and (source_version or "-") != required_version
+        ):
+            message = gui_web.tr(
+                "Version mismatch detected.\n\n"
+                "Live client: {live_version}\n"
+                "Expected: {expected_version}\n\n"
+                "If your live version exceeds that of the patch, please wait for an update. Otherwise, please update your live game and try again.",
+                live_version=source_version or "-",
+                expected_version=required_version,
+            )
+            self._log("[install] stopped before automatic copy: version mismatch")
+            self._stop_with_message("Version mismatch", message)
+            return False
 
         self._log("[integrity] verifying detected Live Tarkov before automatic copy")
         live_ok, live_report = _verify_root(
@@ -268,7 +307,10 @@ def enable_source_integrity_hooks() -> None:
             on_progress=self._web_progress_callback(),
             cancel_event=cancel_event,
         )
-        self._log("[copy] early Live game copy completed; verifying copied destination")
+        self._log(
+            "[copy] Live game copy passed whole-copy verification; "
+            "re-checking release delta inputs"
+        )
 
         destination_ok, destination_report = _verify_root(
             self,
@@ -276,11 +318,12 @@ def enable_source_integrity_hooks() -> None:
             destination,
             workers,
             cancel_event,
+            post_copy=True,
         )
         if not destination_ok:
             self._log(
-                "[copy] copied destination failed exact verification; no patches were applied. "
-                "Delete the destination before retrying."
+                "[copy] copied destination failed release source verification; no patches "
+                "were applied. Delete the destination before retrying."
             )
             return False
 
@@ -298,8 +341,6 @@ def enable_source_integrity_hooks() -> None:
     def apply_with_source_preflight(self, *args, **kwargs):
         _ensure_run_state(self)
 
-        # Force can bypass heuristic version/folder-size checks, but exact source
-        # hashes are proof of whether a delta can decode and are never bypassed.
         try:
             force = bool(self.i_force.get())
         except Exception:
