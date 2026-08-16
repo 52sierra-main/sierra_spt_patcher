@@ -54,9 +54,6 @@ def enable_source_integrity_hooks() -> None:
         return
     _ENABLED = True
 
-    # gui_hybrid has already replaced gui_web.generate_patches with the current
-    # hybrid generator by the time main imports this module. Wrap that final
-    # callable so hashes describe only files that really remained as deltas.
     original_generate = gui_web.generate_patches
 
     def generate_with_source_hashes(*args, **kwargs):
@@ -121,6 +118,15 @@ def enable_source_integrity_hooks() -> None:
 
     gui_web.copy_live_game = copy_live_game_once
 
+    def _ensure_run_state(self) -> None:
+        # gui_web resets this legacy flag to False at the start of every install.
+        # Reuse that reliable per-run boundary, but track the actual verified path
+        # rather than treating verification as a global boolean.
+        if not getattr(self, "_source_preflight_done", False):
+            self._source_preflight_done = True
+            self._source_preflight_verified_root = ""
+            self._install_mode_logged = False
+
     def _verify_root(
         self,
         storage_root,
@@ -181,13 +187,14 @@ def enable_source_integrity_hooks() -> None:
         the multi-GB package download and before any patch is applied.
         """
 
+        _ensure_run_state(self)
         automatic_reader = getattr(self, "_automatic_copy_enabled", None)
         automatic_copy = bool(
             automatic_reader() if callable(automatic_reader) else False
         )
 
         if not automatic_copy:
-            if not getattr(self, "_install_mode_logged", False):
+            if not self._install_mode_logged:
                 self._install_mode_logged = True
                 self._log(f"[install] install mode=existing copy destination={destination}")
             ok, _report = _verify_root(
@@ -201,7 +208,7 @@ def enable_source_integrity_hooks() -> None:
 
         # If this exact destination was already verified after the automatic copy,
         # a later patch-stage call has nothing useful to repeat.
-        if _path_key(destination) == getattr(self, "_source_preflight_verified_root", ""):
+        if _path_key(destination) == self._source_preflight_verified_root:
             self._log(
                 "[integrity] copied destination already passed exact source verification; "
                 "not re-checking"
@@ -226,7 +233,7 @@ def enable_source_integrity_hooks() -> None:
         live_path = installation["install_path"]
         live_executable = Path(live_path) / "EscapeFromTarkov.exe"
         source_version = gui_web.exe_version(live_executable)
-        if not getattr(self, "_install_mode_logged", False):
+        if not self._install_mode_logged:
             self._install_mode_logged = True
             self._log(
                 f"[install] install mode=automatic copy live={live_path} "
@@ -289,6 +296,8 @@ def enable_source_integrity_hooks() -> None:
     original_apply = ResilientSierraPatcherGUI._apply_patches_for_gui
 
     def apply_with_source_preflight(self, *args, **kwargs):
+        _ensure_run_state(self)
+
         # Force can bypass heuristic version/folder-size checks, but exact source
         # hashes are proof of whether a delta can decode and are never bypassed.
         try:
@@ -309,7 +318,7 @@ def enable_source_integrity_hooks() -> None:
         if destination is None or patch_root is None:
             raise RuntimeError("could not determine destination/package roots for source preflight")
 
-        if _path_key(destination) == getattr(self, "_source_preflight_verified_root", ""):
+        if _path_key(destination) == self._source_preflight_verified_root:
             self._log(
                 "[integrity] this exact destination was already verified before download; "
                 "not re-checking"
