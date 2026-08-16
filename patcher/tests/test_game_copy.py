@@ -95,6 +95,37 @@ class GameCopyTests(unittest.TestCase):
             self.assertFalse((destination / COPY_STATE_FILENAME).exists())
             self.assertEqual((destination / "EscapeFromTarkov_Data.bin").read_bytes(), payload)
 
+    def test_verification_failure_keeps_resume_state_and_removes_bad_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "Live"
+            destination = root / "SPT"
+            source.mkdir()
+            (source / "EscapeFromTarkov.exe").write_bytes(b"exe")
+            (source / "payload.bin").write_bytes(b"correct payload")
+
+            real_sha256 = game_copy._sha256_file
+
+            def corrupt_destination_hash(path, cancel_event=None):
+                candidate = Path(path)
+                if candidate == destination / "payload.bin":
+                    return "0" * 64
+                return real_sha256(path, cancel_event)
+
+            with mock.patch.object(
+                game_copy,
+                "_sha256_file",
+                side_effect=corrupt_destination_hash,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "SHA-256 mismatch"):
+                    copy_live_game(source, destination, source_version="1.0")
+
+            self.assertTrue((destination / COPY_STATE_FILENAME).is_file())
+            self.assertFalse((destination / "payload.bin").exists())
+            status = inspect_copy_destination(source, destination, "1.0")
+            self.assertTrue(status.ready)
+            self.assertTrue(status.resumable)
+
     @unittest.skipUnless(os.name == "nt", "Windows long-path behavior")
     def test_copy_supports_long_windows_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -113,6 +144,7 @@ class GameCopyTests(unittest.TestCase):
 
             with open(game_copy._io_path(destination / relative), "rb") as stream:
                 self.assertEqual(stream.read(), b"payload")
+
 
 if __name__ == "__main__":
     unittest.main()
