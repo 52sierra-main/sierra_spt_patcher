@@ -10,7 +10,7 @@ from pathlib import Path, PurePosixPath
 from typing import Callable
 
 from .package_format import HYBRID_PACKAGE_DIRS
-from .web_catalog import build_catalog
+from .web_catalog import CatalogRelease, build_catalog
 from .web_delivery import _promote_object
 
 
@@ -253,8 +253,16 @@ def rebuild_catalog(repository_root: str | Path) -> tuple[Path, list[str]]:
     root = Path(repository_root).resolve()
     root.mkdir(parents=True, exist_ok=True)
     releases = list_releases(root)
+    catalog_releases: list[CatalogRelease] = []
+    for release in releases:
+        try:
+            metadata = load_release_metadata(root, release)
+            required_live_version = str(metadata.get("version") or "").strip() or None
+        except RepositoryToolError:
+            required_live_version = None
+        catalog_releases.append(CatalogRelease(release, required_live_version))
     catalog_path = root / "catalog.json"
-    _atomic_json(catalog_path, build_catalog(releases))
+    _atomic_json(catalog_path, build_catalog(catalog_releases))
     return catalog_path, releases
 
 

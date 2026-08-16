@@ -9,8 +9,13 @@ from . import gui_web
 from .gui_web import IntegratedSierraPatcherGUI
 from .i18n import canonical_choice, tr
 from .metadata import Meta
-from .paths import STORAGE_read_DIR
-from .web_catalog import CATALOG_PLACEHOLDER, fetch_release_catalog
+from .paths import STORAGE_read_DIR, WORKING_DIR
+from .release_metadata_probe import probe_release_live_version
+from .web_catalog import (
+    CATALOG_PLACEHOLDER,
+    CatalogRelease,
+    fetch_release_catalog_details,
+)
 
 
 class CatalogSierraPatcherGUI(IntegratedSierraPatcherGUI):
@@ -43,7 +48,7 @@ class CatalogSierraPatcherGUI(IntegratedSierraPatcherGUI):
         self.i_web_release.grid(row=1, column=1, sticky="ew", padx=12, pady=(6, 0))
         self.i_web_release.bind(
             "<<ComboboxSelected>>",
-            lambda _event: (self._validate_install_ready(), self._refresh_status()),
+            self._on_release_selected,
         )
 
         # Match the destination field's required marker.
@@ -80,6 +85,9 @@ class CatalogSierraPatcherGUI(IntegratedSierraPatcherGUI):
         self._catalog_loading = False
         self._catalog_loaded = False
         self._catalog_error: str | None = None
+        self._catalog_release_details: dict[str, CatalogRelease] = {}
+        self._release_probe_loading: set[str] = set()
+        self._release_probe_checked: set[str] = set()
         self._toggle_install_web_options()
         if canonical_choice(self.i_source_var.get(), gui_web.PACKAGE_SOURCES) == "Web release":
             self._load_release_catalog_async()
@@ -111,6 +119,7 @@ class CatalogSierraPatcherGUI(IntegratedSierraPatcherGUI):
 
         self._catalog_loading = True
         self._catalog_error = None
+        self._catalog_release_details = {}
         self.i_web_release_var.set(tr(CATALOG_PLACEHOLDER))
         self.i_web_release.configure(values=(tr(CATALOG_PLACEHOLDER),))
         self._release_hint.configure(text=tr("Loading available versions..."))
@@ -118,7 +127,7 @@ class CatalogSierraPatcherGUI(IntegratedSierraPatcherGUI):
 
         def worker():
             try:
-                releases = fetch_release_catalog()
+                releases = fetch_release_catalog_details()
                 error = None
             except Exception as exc:
                 releases = []
@@ -128,8 +137,14 @@ class CatalogSierraPatcherGUI(IntegratedSierraPatcherGUI):
                 self._catalog_loading = False
                 self._catalog_loaded = error is None
                 self._catalog_error = error
+                self._catalog_release_details = {
+                    release.id: release for release in releases
+                }
+                self._release_probe_loading.clear()
+                self._release_probe_checked.clear()
 
-                values = (tr(CATALOG_PLACEHOLDER), *releases)
+                release_ids = tuple(release.id for release in releases)
+                values = (tr(CATALOG_PLACEHOLDER), *release_ids)
                 self.i_web_release.configure(values=values)
                 self.i_web_release_var.set(tr(CATALOG_PLACEHOLDER))
 
@@ -154,13 +169,84 @@ class CatalogSierraPatcherGUI(IntegratedSierraPatcherGUI):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _on_release_selected(self, _event=None) -> None:
+        self._probe_selected_release_async()
+        self._validate_install_ready()
+        self._refresh_status()
+
+    def _probe_selected_release_async(self) -> None:
+        release = self._selected_catalog_release()
+        if (
+            release is None
+            or release.required_live_version
+            or release.id in self._release_probe_loading
+            or release.id in self._release_probe_checked
+        ):
+            return
+
+        release_id = release.id
+        cache_text = self.i_web_cache.get().strip()
+        cache_root = Path(cache_text or (Path(WORKING_DIR) / "web_cache"))
+        self._release_probe_loading.add(release_id)
+        self._log(f"[preflight] checking release metadata: {release_id}")
+
+        def worker():
+            try:
+                version = probe_release_live_version(release_id, cache_root)
+                error = None
+            except Exception as exc:
+                version = None
+                error = str(exc)
+
+            def finish():
+                self._release_probe_loading.discard(release_id)
+                self._release_probe_checked.add(release_id)
+                if version:
+                    self._catalog_release_details[release_id] = CatalogRelease(
+                        release_id,
+                        version,
+                    )
+                    self._log(f"[preflight] release metadata ready: {release_id} ({version})")
+                else:
+                    self._log(f"[preflight] release metadata unavailable: {release_id} ({error})")
+                self._validate_install_ready()
+                self._refresh_status()
+
+            self.after(0, finish)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _selected_release_probe_loading(self) -> bool:
+        release = self._selected_catalog_release()
+        return bool(release and release.id in self._release_probe_loading)
+
+    def _selected_catalog_release(self) -> CatalogRelease | None:
+        if not hasattr(self, "_catalog_release_details"):
+            return None
+        release_id = self.i_web_release_var.get().strip()
+        return self._catalog_release_details.get(release_id)
+
+    def _selected_required_live_version(self) -> str | None:
+        release = self._selected_catalog_release()
+        return release.required_live_version if release is not None else None
+
     def _validate_install_ready(self):
         # Parent __init__ can call this before the catalog widgets exist.
         if not hasattr(self, "i_web_release_var"):
             return super()._validate_install_ready()
 
-        destination = (self.i_dest_var.get() or "").strip()
-        valid_destination = bool(destination and Path(destination).is_dir())
+        destination_reader = getattr(self, "_destination_value", None)
+        destination = (
+            destination_reader()
+            if callable(destination_reader)
+            else (self.i_dest_var.get() or "").strip()
+        )
+        destination_validator = getattr(self, "_destination_ready_for_install", None)
+        valid_destination = (
+            bool(destination_validator())
+            if callable(destination_validator)
+            else bool(destination and Path(destination).is_dir())
+        )
         web_mode = canonical_choice(self.i_source_var.get(), gui_web.PACKAGE_SOURCES) == "Web release"
         release = self.i_web_release_var.get().strip()
         valid_release = not web_mode or bool(
@@ -214,7 +300,11 @@ class CatalogSierraPatcherGUI(IntegratedSierraPatcherGUI):
             self._stat["pat_title"].set(tr("Choose version"))
             self._stat["pat_patches"].set(tr("Not prepared"))
             return
-        super()._refresh_status()
+        result = super()._refresh_status()
+        selected = self._selected_catalog_release()
+        if selected is not None and selected.required_live_version:
+            self._stat["pat_version"].set(selected.required_live_version)
+        return result
 
     def _run_install(self):
         if (

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
-from .web_catalog import build_catalog
+from .web_catalog import CatalogRelease, build_catalog, parse_release_catalog
 
 
 MANIFEST_FORMAT_VERSION = 1
@@ -84,11 +84,52 @@ def _catalog_release_ids(repository_root: Path, current_package_id: str) -> list
     return result
 
 
-def _write_catalog(repository_root: Path, package_id: str, cancel_event=None) -> Path:
+def _package_required_live_version(canonical_root: Path) -> str | None:
+    metadata_root = canonical_root / "storage"
+    metadata_path = next(metadata_root.glob("*.info"), None)
+    if metadata_path is None:
+        return None
+    try:
+        raw = metadata_path.read_text(encoding="utf-8")
+        stripped = raw.lstrip()
+        if stripped.startswith("{"):
+            data = json.loads(raw)
+            version = data.get("version")
+        else:
+            lines = raw.splitlines()
+            version = lines[0] if lines else None
+    except Exception:
+        return None
+    cleaned = str(version or "").strip()
+    return cleaned or None
+
+
+def _write_catalog(
+    repository_root: Path,
+    package_id: str,
+    cancel_event=None,
+    *,
+    required_live_version: str | None = None,
+) -> Path:
     _raise_if_cancelled(cancel_event)
     catalog_path = repository_root / "catalog.json"
     temp_catalog = repository_root / "catalog.json.tmp"
-    data = build_catalog(_catalog_release_ids(repository_root, package_id))
+    existing_versions = {}
+    if catalog_path.is_file():
+        try:
+            existing = json.loads(catalog_path.read_text(encoding="utf-8"))
+            existing_versions = {
+                release.id: release.required_live_version
+                for release in parse_release_catalog(existing)
+            }
+        except Exception:
+            pass
+    existing_versions[package_id] = required_live_version
+    releases = [
+        CatalogRelease(release_id, existing_versions.get(release_id))
+        for release_id in _catalog_release_ids(repository_root, package_id)
+    ]
+    data = build_catalog(releases)
     try:
         temp_catalog.write_text(
             json.dumps(data, indent=2, ensure_ascii=False),
@@ -303,8 +344,9 @@ def publish_web_package(
         releases/<package_id>/manifest.json
         objects/<first-two-hash-chars>/<sha256>
 
-    catalog.json is intentionally tiny and contains release IDs only. Clients
-    can populate a version chooser without downloading every manifest.
+    catalog.json is intentionally tiny and contains release IDs plus an
+    optional required Live version. Clients can perform a lightweight
+    compatibility check without downloading every manifest.
     """
 
     _raise_if_cancelled(cancel_event)
@@ -400,7 +442,12 @@ def publish_web_package(
     # Publish/update the tiny version index only after the release manifest is
     # complete. When deploying to HFS, catalog.json should likewise be uploaded
     # after the release manifest so clients never discover a half-published ID.
-    catalog_path = _write_catalog(repository_root, package_id, cancel_event)
+    catalog_path = _write_catalog(
+        repository_root,
+        package_id,
+        cancel_event,
+        required_live_version=_package_required_live_version(canonical_root),
+    )
 
     return PublishResult(
         manifest_path=manifest_path,

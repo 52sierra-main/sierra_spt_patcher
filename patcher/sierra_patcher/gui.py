@@ -440,7 +440,7 @@ class SierraPatcherGUI(tk.Tk):
                 translated = self._translated_choice_value(
                     current,
                     sources,
-                    ("Select pasted Live folder",),
+                    ("Select pasted Live folder", "Select new SPT folder"),
                 )
                 if translated != current:
                     destination_var.set(translated)

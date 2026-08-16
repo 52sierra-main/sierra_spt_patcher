@@ -244,8 +244,25 @@ class HybridSierraPatcherGUI(ResilientSierraPatcherGUI):
                 )
 
             destination = self._destination_value()
-            destination_ready = bool(destination and Path(destination).is_dir())
-            if ready and destination_ready and not getattr(self, "_install_running", False):
+            destination_validator = getattr(self, "_destination_ready_for_install", None)
+            destination_ready = (
+                bool(destination_validator())
+                if callable(destination_validator)
+                else bool(destination and Path(destination).is_dir())
+            )
+            preflight = self._version_preflight()
+            force = bool(self.i_force.get())
+            preflight_ready = not (
+                preflight is not None
+                and preflight.blocks_download
+                and not force
+            )
+            if (
+                ready
+                and destination_ready
+                and preflight_ready
+                and not getattr(self, "_install_running", False)
+            ):
                 self.btn_install.state(["!disabled"])
             else:
                 self.btn_install.state(["disabled"])
@@ -414,7 +431,13 @@ class HybridSierraPatcherGUI(ResilientSierraPatcherGUI):
             self._archived_cleanup_pending = False
             self._archived_cleanup_package_id = None
             self._archived_cleanup_cache = None
-        return super()._run_install()
+        result = super()._run_install()
+        if not getattr(self, "_install_running", False):
+            self._offline_source_config = None
+            self._archived_cleanup_pending = False
+            self._archived_cleanup_package_id = None
+            self._archived_cleanup_cache = None
+        return result
 
     def _set_phase(self, phase: str):
         if phase == "Done" and self._archived_cleanup_pending:

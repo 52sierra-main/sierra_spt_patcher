@@ -67,11 +67,52 @@ class I18nTests(unittest.TestCase):
         self.assertEqual(i18n.tr("Install"), "설치")
         self.assertEqual(
             i18n.tr("Live Tarkov Folder"),
-            "라이브 타르코프 폴더",
+            "본섭 타르코프 폴더",
         )
         self.assertEqual(
             i18n.tr("Web release: {release}", release="4.0.1"),
             "웹 릴리스: 4.0.1",
+        )
+
+    def test_version_preflight_messages_are_localized(self) -> None:
+        i18n.set_language("ko")
+        self.assertEqual(i18n.tr("UPDATE LIVE  ⚠"), "본섭 업데이트  ⚠")
+        self.assertEqual(i18n.tr("PATCH UPDATE  ⚠"), "패치 업데이트  ⚠")
+        self.assertEqual(i18n.tr("FOLDER MISMATCH  ⚠"), "폴더 불일치  ⚠")
+        self.assertEqual(i18n.tr("VERSION UNKNOWN  ⚠"), "확인 불가  ⚠")
+        self.assertEqual(i18n.tr("UNVERIFIED  ⚠"), "미확인  ⚠")
+        self.assertEqual(i18n.tr("CHECKING..."), "확인 중...")
+        self.assertEqual(
+            i18n.tr(
+                "Supported {required} · Current {current}",
+                current="1.1.0.46657",
+                required="1.1.0.46699",
+            ),
+            "지원 1.1.0.46699 · 현재 1.1.0.46657",
+        )
+        self.assertEqual(
+            i18n.tr(
+                "Found {destination} · Required {required}",
+                destination="1.1.0.46657",
+                required="1.1.0.46699",
+            ),
+            "대상 1.1.0.46657 · 필요 1.1.0.46699",
+        )
+        self.assertEqual(
+            i18n.tr("Couldn’t read game version"),
+            "게임 버전을 읽지 못했어요",
+        )
+        self.assertEqual(
+            i18n.tr("No version data · Checked after download"),
+            "버전 정보 없음 · 다운로드 후 확인",
+        )
+        self.assertEqual(
+            i18n.tr("No patch data was downloaded."),
+            "패치 데이터는 다운로드하지 않았어요.",
+        )
+        self.assertEqual(
+            i18n.tr("The destination and cache folders must be separate."),
+            "대상 폴더와 캐시 폴더는 서로 분리되어 있어야 해요.",
         )
 
     def test_localized_choices_round_trip_to_internal_value(self) -> None:

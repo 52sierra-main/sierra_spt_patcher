@@ -2,7 +2,7 @@
 
 This guide is for normal users installing SPT with **Sierra Installer 0.2.0**.
 
-> **Important:** Do **not** install SPT directly into your official Live Tarkov folder. Always make a separate copy first.
+> **Important:** Do **not** install SPT directly into your official Live Tarkov folder. Use automatic copy or a separate copy.
 
 ---
 
@@ -10,7 +10,7 @@ This guide is for normal users installing SPT with **Sierra Installer 0.2.0**.
 
 1. Make sure your official Escape from Tarkov installation is installed and up to date.
 2. Close Escape from Tarkov, the Tarkov launcher, SPT, and any other program using the game folder.
-3. Make a **fresh copy of the entire official Tarkov folder** to a new location.
+3. Prepare a new or empty folder for SPT. Sierra Installer can copy the official Tarkov folder automatically.
 
 Example:
 
@@ -24,7 +24,7 @@ C:\Games\SPT
 
 The copied folder should contain `EscapeFromTarkov.exe`.
 
-**Use the copied folder as the Sierra Installer destination. Do not select the official Live folder.**
+If automatic detection is unavailable, make a fresh copy yourself and select **Use existing copy**. Never select the official Live folder as the destination.
 
 Make sure the drive has enough free space for the copied game and the installation process.
 
@@ -37,7 +37,7 @@ Make sure the drive has enough free space for the copied game and the installati
 3. Make sure **Source** is set to **Web release**.
 4. Wait for the available versions to load.
 5. Choose the SPT version you want to install.
-6. Under **Destination to patch**, select the **fresh Tarkov copy** you made earlier.
+6. Leave **Automatic copy (recommended)** selected and choose the new SPT folder. To use a manual copy, select **Use existing copy** instead.
 7. Click **Install SPT** **once**.
 8. Wait for the installer to finish.
 
@@ -64,7 +64,7 @@ An **Archived snapshot** is an offline/local copy of a Sierra release.
 
 1. Keep the entire Archived snapshot folder together. Do not delete or move files inside its `objects` or `releases` folders.
 2. Run the Sierra Installer executable included with the Archived snapshot, or select **Archived snapshot** as the source.
-3. Select a **fresh copy of Tarkov** as the destination.
+3. Use **Automatic copy (recommended)** with a new SPT folder, or select a fresh Tarkov copy under **Use existing copy**.
 4. Click **Install SPT** once.
 5. Wait for the archive verification and installation to finish.
 
