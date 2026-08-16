@@ -10,6 +10,7 @@ try:
     from .flags import is_dev_mode
     from .generation_guard import enable_generation_guard
     from .gui import _hide_console_on_windows
+    from .patch_failure_hooks import enable_patch_failure_hooks
     from .runtime_requirement_hooks import enable_runtime_requirement_hooks
     from .session_log import session_log, start_session_logging
     from .source_integrity_hooks import enable_source_integrity_hooks
@@ -20,6 +21,7 @@ except ImportError:  # frozen exe starting main.py as a script
     from sierra_patcher.flags import is_dev_mode
     from sierra_patcher.generation_guard import enable_generation_guard
     from sierra_patcher.gui import _hide_console_on_windows
+    from sierra_patcher.patch_failure_hooks import enable_patch_failure_hooks
     from sierra_patcher.runtime_requirement_hooks import enable_runtime_requirement_hooks
     from sierra_patcher.session_log import session_log, start_session_logging
     from sierra_patcher.source_integrity_hooks import enable_source_integrity_hooks
@@ -33,9 +35,10 @@ def main(argv: list[str] | None = None) -> None:
     # modules, and any startup failure all land in the same file.
     start_session_logging()
 
-    # Install generation post-processing hooks before either CLI or GUI dispatch.
-    # Source integrity wraps the hybrid generator first; runtime discovery then
-    # wraps that result so both manifests are produced for every new release.
+    # Install generation/runtime and patch-safety hooks before either CLI or GUI
+    # dispatch. Source integrity wraps the hybrid generator; runtime discovery
+    # then wraps that result so both manifests are produced for new releases.
+    enable_patch_failure_hooks()
     enable_source_integrity_hooks()
     enable_runtime_requirement_hooks()
 
