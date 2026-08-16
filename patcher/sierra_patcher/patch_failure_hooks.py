@@ -87,7 +87,29 @@ def enable_patch_failure_hooks() -> None:
     )
     patch_apply.format_patch_failure_summary = _format_patch_failure_summary
 
-    # gui_resilient imported these symbols directly, so update its module-level
-    # references as well. The underlying apply function still resolves the
-    # classification sets from patch_apply at runtime.
+    # PR4's core apply loop used wording that assumed every deterministic zstd
+    # error proved the destination was the wrong build. Keep the control flow,
+    # but neutralize those log lines now that corruption has its own category.
+    original_emit_log = patch_apply._emit_log
+
+    def emit_log(callback, message: str) -> None:
+        text = str(message)
+        text = text.replace("source mismatches", "deterministic failures")
+        if text.startswith("[patch] ABORTED EARLY:"):
+            text = (
+                "[patch] ABORTED EARLY: repeated deterministic patch failures reached "
+                "the safety cutoff."
+            )
+        elif text.startswith("[patch] The remaining patches were not attempted"):
+            text = (
+                "[patch] The remaining patches were not attempted because retrying the "
+                "same deterministic failures cannot help. Use a fresh destination and "
+                "review the log if the problem repeats."
+            )
+        original_emit_log(callback, text)
+
+    patch_apply._emit_log = emit_log
+
+    # gui_resilient imported this class directly. PatchApplyError itself resolves
+    # patch_apply.format_patch_failure_summary at construction time.
     gui_resilient.PatchApplyError = patch_apply.PatchApplyError
