@@ -2,15 +2,16 @@
 
 This guide is for normal users installing SPT with **Sierra Installer 0.2.0**.
 
-> **Important:** Do **not** install SPT directly into your official Live Tarkov folder. Use automatic copy or a separate copy.
+> **Important:** Never install SPT directly into your official Live Tarkov folder.
 
 ---
 
 ## 1. Before you start
 
-1. Make sure your official Escape from Tarkov installation is installed and up to date.
-2. Close Escape from Tarkov, the Tarkov launcher, SPT, and any other program using the game folder.
-3. Prepare a new or empty folder for SPT. Sierra Installer can copy the official Tarkov folder automatically.
+1. Make sure official Escape from Tarkov is installed and up to date.
+2. Close Tarkov, the BSG launcher, SPT, and other programs using the game folder.
+3. Choose a new or empty folder for SPT.
+4. Make sure the destination drive has enough free space.
 
 Example:
 
@@ -18,15 +19,11 @@ Example:
 Official Live Tarkov:
 C:\Games\EscapeFromTarkov
 
-Fresh copy for SPT:
+New SPT folder:
 C:\Games\SPT
 ```
 
-The copied folder should contain `EscapeFromTarkov.exe`.
-
-If automatic detection is unavailable, make a fresh copy yourself and select **Use existing copy**. Never select the official Live folder as the destination.
-
-Make sure the drive has enough free space for the copied game and the installation process.
+Use **Automatic copy (recommended)** whenever Sierra can detect Live Tarkov. If detection is unavailable, make a separate copy yourself and choose **Use existing copy**.
 
 ---
 
@@ -34,36 +31,36 @@ Make sure the drive has enough free space for the copied game and the installati
 
 1. Open **Sierra Installer**.
 2. Stay on the **Install** tab.
-3. Make sure **Source** is set to **Web release**.
+3. Leave **Source** on **Web release**.
 4. Wait for the available versions to load.
-5. Choose the SPT version you want to install.
-6. Leave **Automatic copy (recommended)** selected and choose the new SPT folder. To use a manual copy, select **Use existing copy** instead.
+5. Choose the SPT version you want.
+6. Leave **Automatic copy (recommended)** selected and choose a new/empty SPT folder.
 7. Click **Install SPT** **once**.
-8. Wait for the installer to finish.
+8. Wait until the status says **Done**.
 
-The installer may spend some time on stages such as:
+For a current Web release, Automatic Copy works like this:
 
 ```text
-Preparing installation
-Checking your Tarkov copy
-Verifying source files
-Downloading objects
-Reconstructing package
-Applying patches
-Applying storage
+Check release/version compatibility
+        ↓
+Fetch the small storage/integrity data
+        ↓
+Verify official Live Tarkov files
+        ↓
+Copy Live Tarkov → new SPT folder
+        ↓
+Verify the copied SPT folder again
+        ↓
+Download the rest of the release
+        ↓
+Apply patches and finish installation
 ```
 
-**Sierra Installer checks your Tarkov copy before it downloads anything.** It only needs
-about 5 MB to do this. If your copy is not the right one, it stops there and
-tells you, without downloading the whole release and without changing a single
-file in your folder.
+The second verification is intentional. It catches a file that was missed, changed, blocked, or corrupted while being copied before Sierra starts patching it.
 
-The check itself takes a minute or two, because Sierra reads every file the
-patch needs. That is normal, even though nothing appears to be downloading.
+With **Use existing copy**, Sierra verifies the selected copy directly before downloading the rest of the release.
 
-This can take a while, especially on slower drives. **Do not close Sierra Installer while it is working.**
-
-When the status shows **Done**, open the completed SPT folder and use the SPT launcher normally.
+The source-file check can take a minute or two because Sierra reads every file that will be used as delta input. That is normal.
 
 ---
 
@@ -71,11 +68,11 @@ When the status shows **Done**, open the completed SPT folder and use the SPT la
 
 An **Archived snapshot** is an offline/local copy of a Sierra release.
 
-1. Keep the entire Archived snapshot folder together. Do not delete or move files inside its `objects` or `releases` folders.
-2. Run the Sierra Installer executable included with the Archived snapshot, or select **Archived snapshot** as the source.
-3. Use **Automatic copy (recommended)** with a new SPT folder, or select a fresh Tarkov copy under **Use existing copy**.
+1. Keep the whole snapshot together. Do not remove files inside `objects` or `releases`.
+2. Run the included Sierra Installer or select **Archived snapshot**.
+3. Use **Automatic copy (recommended)** with a new SPT folder, or select a separate fresh copy under **Use existing copy**.
 4. Click **Install SPT** once.
-5. Wait for the archive verification and installation to finish.
+5. Wait for verification and installation to finish.
 
 Archived snapshots may spend several minutes on:
 
@@ -83,7 +80,7 @@ Archived snapshots may spend several minutes on:
 Verifying archived objects
 ```
 
-This is normal, especially when the snapshot is stored on an HDD.
+This is normal, especially on an HDD.
 
 ---
 
@@ -91,37 +88,32 @@ This is normal, especially when the snapshot is stored on an HDD.
 
 ## The version list does not load / catalogue download fails
 
-If Sierra says it could not load the available versions, or you see a connection/reset error:
-
-1. Close and reopen Sierra Installer and try again.
-2. Check that your internet connection is working.
-3. Try another network if one is available.
+1. Close and reopen Sierra and try again.
+2. Check your internet connection.
+3. Try another network if possible.
 4. Try a VPN.
 
-If the installer works through another network or VPN, the problem is probably somewhere along the network route between you and the download service.
+If another network or VPN fixes it, the problem is probably somewhere along the route between you and the download service.
 
-If it still fails, send the error from the **Logs** tab to support.
+If it still fails, send the session log to support.
 
 ---
 
 ## Version mismatch
 
-Do **not** use Force just to get past this message.
+Do **not** use Force just to get past this warning.
 
-Instead:
+1. Update/verify official Live Tarkov.
+2. Use a new/empty SPT destination for Automatic Copy, or make a fresh manual copy.
+3. Try again.
 
-1. Update or verify your official Live Tarkov installation.
-2. Delete the SPT copy you were trying to use.
-3. Make a **new copy** from the updated Live Tarkov folder.
-4. Select the new copy in Sierra Installer and try again.
+If the selected SPT release requires a different Live Tarkov build than the one currently available, you may need to wait for the matching patch release.
 
 ---
 
 ## "Source files mismatch"
 
-This means the Tarkov copy you selected is not the exact source expected by that patch.
-
-Sierra may show something like:
+This means exact source-file verification failed. Sierra may show:
 
 ```text
 Source files mismatch
@@ -130,143 +122,116 @@ Matched: 1569
 Mismatched: 3828
 ```
 
-**Nothing in your folder was changed.** This check runs before Sierra downloads
-the release and before it touches any of your files, so you have lost nothing but
-a couple of minutes.
+For current Web releases this happens **before patching starts**.
 
-Do not continue using that copy.
+- If the official Live source fails verification, Sierra stops before copying/patching it.
+- If an existing copy fails verification, Sierra does not patch it.
+- If Automatic Copy succeeds but the **copied destination** fails its second verification, files may already have been copied into the new SPT folder, but **no patches were applied**. Delete that destination and try again with a new/empty folder.
 
-1. Delete the SPT destination folder you selected.
-2. Verify/update the official Live Tarkov installation.
-3. Make a **fresh copy** of Live Tarkov.
-4. Run the installer again using the new copy.
-
-Do **not** repeatedly retry the same failed destination. The result will be
-exactly the same every time.
+Do not repeatedly retry the same bad destination.
 
 ---
 
-## Zstd / checksum / "Data corruption detected" error
+## Zstd / checksum / corruption error
 
-Examples include:
+Possible diagnostic codes include:
 
 ```text
-Restored data doesn't match checksum
-Data corruption detected
-ZSTD_FAILURE
+ZSTD_CHECKSUM_MISMATCH
+ZSTD_CORRUPTION
+ZSTD_IO
 ```
 
-This usually means the selected Tarkov copy does not match the files the patch expects.
+- **ZSTD_CHECKSUM_MISMATCH** is deterministic for the same source + delta and is not retried.
+- **ZSTD_CORRUPTION** is also treated as deterministic, but does not by itself prove that your Tarkov source is the cause; patch/package data can also be involved.
+- **ZSTD_IO** can be temporary (for example antivirus/indexer/file-lock interference), so Sierra may retry it automatically.
 
-This should now be rare, because Sierra checks your files before it starts
-patching. If you see it anyway, something unusual happened and support wants to
-know about it.
+If 25 deterministic patch failures are reached, Sierra stops the remaining patch work to avoid damaging more files.
 
-Sierra also stops on its own after 25 of these errors instead of continuing
-through thousands of files, so the damage is kept small.
+> If **Applying patches** had already started, do not reuse that destination. Delete it and start from a fresh copy/new Automatic Copy destination.
 
-**If the installer had already started Applying patches, do not run the installer again on the same folder.** Some files may already have been changed.
-
-Delete that destination, make a fresh Tarkov copy, and try again.
-
-If a fresh copy fails in exactly the same way, send your log file to support.
+If the same failure happens again from a fresh source, send the session log to support.
 
 ---
 
 ## .NET error / SPT.Server will not start
 
-If Sierra or `SPT.Server.exe` says a Microsoft .NET component is missing:
+Sierra records the runtime requirements of newer releases and warns when required Microsoft .NET/ASP.NET components are missing.
 
-1. Read the error carefully.
-2. Install the **x64 .NET / ASP.NET runtime version requested by the error or Sierra warning**.
-3. Restart Sierra Installer or SPT after installation.
+1. Install the **x64 runtime family and minimum version shown by Sierra**.
+2. Restart Sierra/SPT after installation.
 
-Do not assume that having a newer major .NET version automatically replaces the requested version.
-
-If you are unsure, send a screenshot of the .NET error to support.
+A newer major .NET version does not automatically replace every older runtime family.
 
 ---
 
 ## Installation looks stuck
 
-First check the current stage and the **Logs** tab.
-
-Some stages can take time without immediately showing a large amount of progress, especially:
+Check the current stage and the **Logs** tab. Some stages can take time, especially:
 
 ```text
 Preparing installation
-Verifying archived objects
 Verifying source files
+Copying Live game
+Verifying archived objects
 Reconstructing package
 ```
 
-Do not repeatedly press **Install SPT**. Sierra prevents multiple installations from starting at the same time, but you should still wait for the current operation to finish or fail.
-
-If there has been no new log activity for a long time, copy the Logs and contact support.
+Do not repeatedly press **Install SPT**. Sierra blocks duplicate install workers, but the current operation still needs time to finish or fail.
 
 ---
 
 ## Download fails part-way through
 
-For a download/package preparation failure, you can normally reopen Sierra and try the download again because verified cache files can be reused.
+For a download/package-preparation failure, reopening Sierra and retrying is normally safe because completed cache objects can be reused.
 
-Note that if your Tarkov copy was the problem, Sierra will have told you before
-the download even started, so a download failure is a separate issue.
-
-However, if the failure happened **after `Applying patches` started**, do not reuse the destination folder. Make a fresh Tarkov copy first.
+If the failure happened **after `Applying patches` started**, do not reuse the destination folder.
 
 ---
 
 ## What does Force do?
 
-**Force is not a normal installation option.** You should not need it.
+**Force is not a normal installation option.**
 
-Force skips two checks that can sometimes be wrong:
+Force can bypass heuristic checks such as:
 
-- the **version number** check, because Tarkov's version number does not always change when the game files do
-- the **folder size** check, which is only a rough guess
+- the version-number warning
+- the rough folder-size check
 
-**Force does not skip the file check.** Sierra always compares your files against the exact files the patch needs, and Force cannot turn that off. This is on
-purpose: if those files do not match, the patch physically cannot work, so letting you continue would only break your folder.
+**Force cannot bypass exact source-file SHA-256 verification.** If those source bytes do not match, the delta cannot be safely applied.
 
-In short: Force can get you past a warning that might be a false alarm. It cannot get you past a real problem, and it will not make a wrong Tarkov copy work.
-
-Only use **Force** when you understand why a check is failing, or when support asks you to.
+Only use Force when you understand the warning or support specifically asks you to.
 
 ---
 
-# The safest rule after any patching failure
+# Safest rule after a patching failure
 
-> **If `Applying patches` had already started, throw away that destination folder and make a fresh copy of Live Tarkov before trying again.**
+> **If `Applying patches` had already started, delete that destination and start from a fresh copy before trying again.**
 
-Do not try to repair a half-patched folder by running Sierra Installer repeatedly.
+Do not try to repair a half-patched folder by repeatedly running Sierra on it.
 
 ---
 
 # What to send when asking for help
 
-**The easiest and most useful thing you can send is the log file.**
+The most useful item is the **session log**.
 
-Go to the **Logs** tab and click **Save log to file...**, then send us that file.
-It already contains your PC details, the version you chose, the folder you
-selected, your settings, and everything Sierra did, with times. That answers
-almost every question we would otherwise have to ask you.
+Open **Logs** and click **Save log to file...**. Sierra also has **Copy log** and **Open log folder** buttons and keeps the latest 10 session logs.
 
-There is also an **Open log folder** button if you would rather find the files
-yourself. Sierra keeps the last 10.
+The log records useful support information such as system details, selected release, destination, worker settings, Force state, install mode, detected Live source/version, integrity results, and errors.
 
-If you cannot send the file, please include:
+> Logs can contain local file paths and system information. Review them before posting them publicly. Never send passwords or account credentials.
 
-- A screenshot of the error.
-- The SPT version you selected.
-- Whether you used **Web release** or **Archived snapshot**.
-- Whether the destination was a **fresh copy of Live Tarkov**.
-- Whether **Force** was ticked.
-- Whether another network or VPN changes the problem, if the failure is download-related.
+If you cannot send the log, include:
+
+- a screenshot of the error
+- the SPT version selected
+- Web release or Archived snapshot
+- Automatic Copy or Use existing copy
+- whether Force was enabled
+- whether another network/VPN changes a download problem
 
 Support:
 
 - Discord: https://discord.gg/uKMW8PxE8s
 - Email: sierra@52sierra.net
-
-Please do not send passwords, account credentials, or other private information.
