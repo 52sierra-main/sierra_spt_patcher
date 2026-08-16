@@ -7,16 +7,20 @@ __pycache__/
 # Build / distribution artifacts
 /dist/
 /build/
+/patcher/dist/
+/patcher/build/
 
-# Your patcher outputs
+# Legacy/root package outputs
 /patch_output/
 /patchfiles/
 /storage/
 /additional_files/
 
-# Runtime output beside the app. These are created in WORKING_DIR, which is the
-# patcher/ folder when running from source and the exe's folder when frozen, so
-# the patterns are deliberately not anchored to the repository root.
-logs/
-web_cache/
-web_repo_output/
+# Source-run outputs use patcher/ as WORKING_DIR.
+/patcher/patch_output/
+/patcher/patchfiles/
+/patcher/storage/
+/patcher/additional_files/
+/patcher/logs/
+/patcher/web_cache/
+/patcher/web_repo_output/
