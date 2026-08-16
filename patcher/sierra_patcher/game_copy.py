@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import ntpath
 import os
@@ -155,6 +156,27 @@ def _disk_usage_root(path: Path) -> Path:
     return candidate
 
 
+def _sha256_file(path: Path, cancel_event=None) -> str:
+    digest = hashlib.sha256()
+    with open(_io_path(path), "rb") as stream:
+        while True:
+            _raise_if_cancelled(cancel_event)
+            chunk = stream.read(_COPY_CHUNK_BYTES)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _remove_failed_copy(path: Path) -> None:
+    try:
+        os.unlink(_io_path(path))
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
+
+
 def copy_live_game(
     source: str | os.PathLike,
     destination: str | os.PathLike,
@@ -163,7 +185,13 @@ def copy_live_game(
     on_progress=None,
     cancel_event=None,
 ) -> None:
-    """Copy a detected Live install into a new SPT folder with copy-only resume."""
+    """Copy Live into a new SPT folder, resume safely, and verify every file.
+
+    Source SHA-256 is calculated while new files are being read for the copy.
+    Reused resume files are hashed from the source. After the copy pass, every
+    destination file is hashed and compared before the resume-state marker is
+    removed. A bad destination file is deleted so the next resume recopies it.
+    """
 
     source_path = Path(source)
     destination_path = Path(destination)
@@ -218,9 +246,14 @@ def copy_live_game(
 
     copied_bytes = 0
     progress_total = max(total_bytes, 1)
+    expected_hashes: dict[Path, str] = {}
+
     for source_file, destination_file, size in files:
         _raise_if_cancelled(cancel_event)
         if _same_file(source_file, destination_file):
+            # Resume reuse is still verified cryptographically. Size+mtime is
+            # only a fast copy-skip hint, never the final integrity decision.
+            expected_hashes[destination_file] = _sha256_file(source_file, cancel_event)
             copied_bytes += size
             if on_progress is not None:
                 on_progress(
@@ -232,6 +265,7 @@ def copy_live_game(
             continue
 
         os.makedirs(_io_path(destination_file.parent), exist_ok=True)
+        source_digest = hashlib.sha256()
         with open(_io_path(source_file), "rb") as source_stream, open(
             _io_path(destination_file), "wb"
         ) as destination_stream:
@@ -240,6 +274,7 @@ def copy_live_game(
                 chunk = source_stream.read(_COPY_CHUNK_BYTES)
                 if not chunk:
                     break
+                source_digest.update(chunk)
                 destination_stream.write(chunk)
                 copied_bytes += len(chunk)
                 if on_progress is not None:
@@ -250,6 +285,62 @@ def copy_live_game(
                         f"Copying {source_file.name}",
                     )
         shutil.copystat(_io_path(source_file), _io_path(destination_file))
+        expected_hashes[destination_file] = source_digest.hexdigest()
+
+    # Full copy verification protects files that are not part of source_hashes.json
+    # (for example files unchanged between Live and the target SPT release).
+    verify_total = max(len(files), 1)
+    for index, (source_file, destination_file, expected_size) in enumerate(files, 1):
+        _raise_if_cancelled(cancel_event)
+        relative = os.path.relpath(_io_path(source_file), source_root)
+
+        if not os.path.isfile(_io_path(destination_file)):
+            raise RuntimeError(f"Live game copy verification failed: missing {relative}")
+        actual_size = os.path.getsize(_io_path(destination_file))
+        if actual_size != expected_size:
+            _remove_failed_copy(destination_file)
+            raise RuntimeError(
+                "Live game copy verification failed: "
+                f"{relative} size changed (expected {expected_size}, found {actual_size})"
+            )
+
+        actual_hash = _sha256_file(destination_file, cancel_event)
+        expected_hash = expected_hashes[destination_file]
+        if actual_hash != expected_hash:
+            _remove_failed_copy(destination_file)
+            raise RuntimeError(
+                "Live game copy verification failed: "
+                f"{relative} SHA-256 mismatch (expected {expected_hash}, found {actual_hash})"
+            )
+
+        if on_progress is not None:
+            on_progress(
+                "install:copy",
+                index,
+                verify_total,
+                f"verified {index}/{len(files)} source files",
+            )
+
+    # A resume destination should mirror the current Live file set. Unexpected
+    # files mean the destination was changed independently or came from a stale
+    # source state, so keep the state marker and require the user to resolve it.
+    expected_relative_files = {
+        os.path.normcase(os.path.relpath(_io_path(destination_file), _io_path(destination_path)))
+        for _source_file, destination_file, _size in files
+    }
+    for root, _dirnames, filenames in os.walk(_io_path(destination_path)):
+        _raise_if_cancelled(cancel_event)
+        for name in filenames:
+            if name == COPY_STATE_FILENAME:
+                continue
+            destination_file = Path(root) / name
+            relative = os.path.normcase(
+                os.path.relpath(_io_path(destination_file), _io_path(destination_path))
+            )
+            if relative not in expected_relative_files:
+                raise RuntimeError(
+                    f"Live game copy verification failed: unexpected file {relative}"
+                )
 
     _raise_if_cancelled(cancel_event)
     try:
@@ -259,7 +350,7 @@ def copy_live_game(
     if on_progress is not None:
         on_progress(
             "install:copy",
-            progress_total,
-            progress_total,
+            1,
+            1,
             "Live game copy complete",
         )
