@@ -1,21 +1,129 @@
-MIT License
+Sierra Source-Available License 1.0
 
-Copyright (c) 2025 sierra
+Copyright (c) 2025-2026 Sierra and contributors.
+All rights reserved except as expressly granted below.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+NOTICE ABOUT EARLIER VERSIONS
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+Sierra Installer version 0.2.1 and earlier were released under the MIT License.
+Those earlier grants remain valid and are not revoked by this license.
+
+This license is intended to govern Sierra Installer versions first released after
+version 0.2.1, except for third-party components or portions of the codebase that
+carry separate license notices or remain subject to earlier license grants.
+
+1. Definitions
+
+"Software" means the source code, object code, documentation, and other materials
+distributed with a version of Sierra Installer governed by this license.
+
+"Copyright Holder" means Sierra, or another copyright owner for a portion of the
+Software where applicable.
+
+"Commercial Use" means use primarily intended for or directed toward commercial
+advantage, monetary compensation, revenue generation, operation of a for-profit
+business, or incorporation into a commercial product or service.
+
+"Development Fork" means a publicly visible fork on a source-code hosting service
+created solely for non-commercial development, review, testing, or contribution
+back to the project, and not promoted or distributed as an independent release.
+
+2. Permissions Granted Without Separate Approval
+
+Subject to the conditions in this license, you may:
+
+a. view, study, and inspect the source code;
+
+b. use the Software for personal, educational, research, testing, and other
+   non-commercial purposes;
+
+c. create and maintain a Development Fork;
+
+d. privately modify the Software for non-commercial development, testing,
+   research, or personal use; and
+
+e. submit modifications to the official Sierra project through pull requests or
+   other contribution mechanisms.
+
+These permissions are non-exclusive, worldwide, royalty-free, and revocable only
+for breach of this license.
+
+3. Activities Requiring Prior Written Permission
+
+Unless the Copyright Holder gives you prior written permission, you may not:
+
+a. sell, rent, license for a fee, or otherwise commercially exploit the Software
+   or a derivative work;
+
+b. use the Software or substantial portions of it for Commercial Use;
+
+c. redistribute the Software, source code, object code, binaries, installers, or
+   modified versions, except for a Development Fork as expressly permitted above;
+
+d. publish or provide an independently distributed build, release, mirror,
+   download, package, installer, archive, or derivative product based on the
+   Software;
+
+e. sublicense the Software;
+
+f. incorporate the Software or substantial portions of it into a commercial
+   product, commercial service, paid hosted service, or other revenue-generating
+   offering; or
+
+g. remove or materially obscure copyright, license, attribution, or authorship
+   notices included with the Software.
+
+4. Development Fork Conditions
+
+A Development Fork is permitted only while all of the following remain true:
+
+a. it is used for non-commercial development, review, testing, or contribution;
+
+b. this license and all applicable copyright notices remain included;
+
+c. it is not represented as an official Sierra release;
+
+d. binaries or packaged releases are not distributed from the fork without prior
+   written permission; and
+
+e. the fork is not used to avoid the restrictions in Section 3.
+
+5. Contributions
+
+Contributions to the official Sierra project are governed by CONTRIBUTING.md in
+effect when the contribution is submitted.
+
+Nothing in this license transfers ownership of a contributor's copyright.
+
+6. Additional Permissions and Commercial Licensing
+
+The Copyright Holder may grant additional permissions, exceptions, redistribution
+rights, or commercial licenses in writing. Such permission may apply to a specific
+person, organization, version, use case, or derivative work.
+
+7. No Trademark License
+
+This license does not grant permission to use the names "Sierra", "Sierra
+Installer", project logos, trademarks, service marks, or branding except as
+reasonably necessary to identify the original project or comply with attribution
+requirements.
+
+8. Termination
+
+Your rights under this license terminate automatically if you materially violate
+its terms and do not cure the violation within 30 days after receiving notice.
+
+Termination does not affect rights separately granted in writing by the Copyright
+Holder or rights you previously received under an earlier license for an earlier
+version of the Software.
+
+9. Disclaimer of Warranty
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT.
+
+IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE LIABLE FOR ANY CLAIM,
+DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE,
+ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OF OR OTHER
+DEALINGS IN THE SOFTWARE.
