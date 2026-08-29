@@ -31,3 +31,18 @@ For troubleshooting and a foolproof step-by-step guide, see **[USER_GUIDE.md](US
 
 
 © Suho Jang(a.k.a sierra) - since 2025
+
+
+## License
+
+Versions of Sierra Installer through **0.2.1** were released under the MIT
+License, and those earlier grants remain valid.
+
+Versions first released after **0.2.1** are intended to use the
+**Sierra Source-Available License 1.0**. The source remains available for
+inspection, non-commercial use, development forks, and private modification,
+but redistribution, independent binary releases, sale, commercial use, and
+commercial incorporation require prior written permission.
+
+See [LICENSE](LICENSE) for the complete terms and [CONTRIBUTING.md](CONTRIBUTING.md)
+for contributor rights.
