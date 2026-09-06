@@ -1,6 +1,6 @@
 # Sierra Installer — Simple User Guide
 
-This guide is for normal users installing SPT with **Sierra Installer 0.2.0**.
+This guide is for normal users installing SPT with **Sierra Installer**.
 
 > **Important:** Never install SPT directly into your official Live Tarkov folder.
 
@@ -47,20 +47,32 @@ Fetch the small storage/integrity data
         ↓
 Verify official Live Tarkov files
         ↓
-Copy Live Tarkov → new SPT folder
+Copy Live Tarkov → new SPT folder (parallel)
         ↓
-Verify the copied SPT folder again
+Verify the copied SPT folder (parallel)
+        ↓
+Compare the same verification hashes to release source requirements
         ↓
 Download the rest of the release
         ↓
 Apply patches and finish installation
 ```
 
-The second verification is intentional. It catches a file that was missed, changed, blocked, or corrupted while being copied before Sierra starts patching it.
+The copied destination is intentionally read back after copying. That catches a file that was missed, changed, blocked, or corrupted while being copied before Sierra starts patching it. For files used as delta sources, the same post-copy SHA-256 is also checked against the release requirement, so Sierra does not need a second separate destination-hash pass.
 
 With **Use existing copy**, Sierra verifies the selected copy directly before downloading the rest of the release.
 
 The source-file check can take a minute or two because Sierra reads every file that will be used as delta input. That is normal.
+
+### Copy / verification workers
+
+Under **Advanced**, Web installs provide **Copy / verification workers**. The default is **4**, with an allowed range of **1–8**.
+
+- **4** is a conservative default for modern SSD/NVMe storage.
+- For an HDD, **1–2** workers may be faster because too much parallel I/O can cause seek thrashing.
+- Faster NVMe-to-NVMe systems may benefit from a higher value, but more workers are not guaranteed to be faster.
+
+This setting is separate from Web download and reconstruction worker counts. Changing it does not change Sierra's download/reassembly settings.
 
 ---
 
@@ -126,7 +138,7 @@ For current Web releases this happens **before patching starts**.
 
 - If the official Live source fails verification, Sierra stops before copying/patching it.
 - If an existing copy fails verification, Sierra does not patch it.
-- If Automatic Copy succeeds but the **copied destination** fails its second verification, files may already have been copied into the new SPT folder, but **no patches were applied**. Delete that destination and try again with a new/empty folder.
+- If Automatic Copy succeeds but the **copied destination** fails its post-copy verification, files may already have been copied into the new SPT folder, but **no patches were applied**. Delete that destination and try again with a new/empty folder.
 
 Do not repeatedly retry the same bad destination.
 
