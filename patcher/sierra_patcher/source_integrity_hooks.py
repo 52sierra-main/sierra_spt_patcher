@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from tkinter import ttk
 
 from . import cli, gui_web
+from .game_copy import DEFAULT_COPY_WORKERS, MAX_COPY_WORKERS
 from .gui_resilient import ResilientSierraPatcherGUI
 from .paths import STORAGE_out_DIR
 from .source_integrity import (
+    _load_source_hash_manifest,
     build_source_hash_manifest,
     describe_source_mismatch,
     format_source_integrity_summary,
@@ -41,12 +44,12 @@ def _copy_key(source, destination, source_version) -> tuple[str, str, str]:
 
 
 def enable_source_integrity_hooks() -> None:
-    """Add exact per-delta source fingerprints and install-time verification.
+    """Add exact source fingerprints and optimized install-time verification.
 
-    New Web releases fetch only ``storage/`` first. Existing-copy installs verify
-    that destination before the full package download. Automatic-copy installs
-    verify the detected Live folder, copy it, verify the copied destination, and
-    only then allow the full package download to continue.
+    Existing-copy installs keep the established parallel source-hash preflight.
+    Automatic-copy installs verify Live first, then copy and verify in parallel.
+    The post-copy destination read is shared with the release source-hash check,
+    so delta-source files are not hashed a second time before the full download.
     """
 
     global _ENABLED
@@ -82,12 +85,60 @@ def enable_source_integrity_hooks() -> None:
     gui_web.generate_patches = generate_with_source_hashes
     cli.generate_patches = generate_with_source_hashes
 
-    # Automatic Web installs now complete the copy during the early storage-only
+    # Add a conservative copy/verification worker control to the existing
+    # Advanced area without changing the user's tuned web worker defaults.
+    original_build_install_tab = ResilientSierraPatcherGUI._build_install_tab
+
+    def build_install_tab_with_copy_workers(self, nb):
+        root = original_build_install_tab(self, nb)
+        if hasattr(self, "_advanced_frame") and not hasattr(self, "i_copy_workers"):
+            frame = self._advanced_frame
+            for widget in frame.grid_slaves():
+                info = widget.grid_info()
+                row = int(info.get("row", 0))
+                if row >= 3:
+                    widget.grid_configure(row=row + 1)
+
+            self.i_copy_workers = ttk.Spinbox(
+                frame,
+                from_=1,
+                to=MAX_COPY_WORKERS,
+            )
+            self.i_copy_workers.delete(0, "end")
+            self.i_copy_workers.insert(0, str(DEFAULT_COPY_WORKERS))
+            self._row(
+                frame,
+                3,
+                "Copy / verification workers",
+                self.i_copy_workers,
+            )
+            if hasattr(self, "_web_install_widgets"):
+                self._web_install_widgets.append(self.i_copy_workers)
+        return root
+
+    ResilientSierraPatcherGUI._build_install_tab = build_install_tab_with_copy_workers
+
+    def _copy_workers_for_gui(self) -> int:
+        widget = getattr(self, "i_copy_workers", None)
+        raw = widget.get() if widget is not None else DEFAULT_COPY_WORKERS
+        try:
+            value = int(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Copy / verification workers must be a whole number") from exc
+        if value < 1 or value > MAX_COPY_WORKERS:
+            raise ValueError(
+                f"Copy / verification workers must be between 1 and {MAX_COPY_WORKERS}"
+            )
+        return value
+
+    # Automatic Web installs complete the copy during the early storage-only
     # preflight. gui_web still reaches its historical copy call later, after the
-    # full package is ready. Remember those completed copies so that call becomes
-    # a no-op instead of rejecting the now-nonempty destination.
+    # full package is ready. Remember completed copies so that later call becomes
+    # a no-op instead of rejecting the now-nonempty destination. Legacy packages
+    # keep the selected worker count for their deferred normal-stage copy.
     original_copy_live_game = gui_web.copy_live_game
     early_completed_copies: set[tuple[str, str, str]] = set()
+    deferred_copy_workers: dict[tuple[str, str, str], int] = {}
 
     def copy_live_game_once(
         source,
@@ -96,10 +147,13 @@ def enable_source_integrity_hooks() -> None:
         source_version=None,
         on_progress=None,
         cancel_event=None,
+        workers=DEFAULT_COPY_WORKERS,
+        release_source_entries=None,
     ):
         key = _copy_key(source, destination, source_version)
         if key in early_completed_copies:
             early_completed_copies.discard(key)
+            deferred_copy_workers.pop(key, None)
             if on_progress is not None:
                 on_progress(
                     "install:copy",
@@ -108,12 +162,16 @@ def enable_source_integrity_hooks() -> None:
                     "Live game copy already completed and verified",
                 )
             return
+
+        worker_count = deferred_copy_workers.pop(key, workers)
         return original_copy_live_game(
             source,
             destination,
             source_version=source_version,
             on_progress=on_progress,
             cancel_event=cancel_event,
+            workers=worker_count,
+            release_source_entries=release_source_entries,
         )
 
     gui_web.copy_live_game = copy_live_game_once
@@ -135,7 +193,6 @@ def enable_source_integrity_hooks() -> None:
         cancel_event=None,
         *,
         mark_verified: bool = True,
-        post_copy: bool = False,
     ):
         def progress(_phase, current, total, message):
             self._set_phase("Verifying source files")
@@ -165,16 +222,10 @@ def enable_source_integrity_hooks() -> None:
             for mismatch in report.mismatches:
                 self._log(f"[integrity] {describe_source_mismatch(mismatch)}")
 
-            summary = format_source_integrity_summary(report)
-            if post_copy:
-                # Automatic Copy has created files in the destination, so the
-                # normal "No game files were modified" sentence would be
-                # misleading. No patches have been applied at this point.
-                unchanged_notice = gui_web.tr("No game files were modified.")
-                summary = "\n".join(
-                    line for line in summary.splitlines() if line != unchanged_notice
-                )
-            self._stop_with_message("Source files mismatch", summary)
+            self._stop_with_message(
+                "Source files mismatch",
+                format_source_integrity_summary(report),
+            )
             self._cancel.set()
             return False, report
 
@@ -189,11 +240,10 @@ def enable_source_integrity_hooks() -> None:
     def verify_source_files(self, storage_root, destination, workers=8, cancel_event=None) -> bool:
         """Verify the source that will actually feed the delta patches.
 
-        For Automatic Copy, the detected Live install is verified first, copied,
-        then the newly-created destination is independently verified. The copy
-        engine itself verifies every copied file; the second source-hash pass
-        additionally proves that the destination still matches this release's
-        exact delta inputs before the full package download begins.
+        For Automatic Copy, Live is checked before copying. The copy engine then
+        performs a parallel whole-copy verification and compares the same hashes
+        against the release source manifest for delta files. No separate second
+        destination source-hash pass is needed.
         """
 
         _ensure_run_state(self)
@@ -217,10 +267,18 @@ def enable_source_integrity_hooks() -> None:
 
         if _path_key(destination) == self._source_preflight_verified_root:
             self._log(
-                "[integrity] copied destination already passed exact source verification; "
+                "[integrity] copied destination already passed merged copy/release verification; "
                 "not re-checking"
             )
             return True
+
+        try:
+            copy_workers = _copy_workers_for_gui(self)
+        except ValueError as exc:
+            self._log(f"[copy] invalid worker setting: {exc}")
+            self._stop_with_message("Invalid setting", str(exc))
+            self._cancel.set()
+            return False
 
         try:
             installation = gui_web.query_install()
@@ -252,7 +310,7 @@ def enable_source_integrity_hooks() -> None:
             self._log(
                 f"[install] install mode=automatic copy live={live_path} "
                 f"live_version={source_version or '-'} required_version={required_version or '-'} "
-                f"destination={destination}"
+                f"destination={destination} copy_workers={copy_workers}"
             )
 
         # The storage-only fetch includes metadata.info, so preserve PR3's cheap
@@ -291,49 +349,43 @@ def enable_source_integrity_hooks() -> None:
         if not live_ok:
             return False
 
+        key = _copy_key(live_path, destination, source_version)
+
         # Legacy packages do not provide exact source hashes. Preserve their old
-        # behavior: defer the copy to the normal install worker after preparation.
+        # behavior: defer the copy to the normal install worker after preparation,
+        # but carry the user's selected parallel copy worker count forward.
         if live_report is None:
+            deferred_copy_workers[key] = copy_workers
             self._log(
-                "[integrity] legacy package: automatic copy remains in the normal install stage"
+                "[integrity] legacy package: automatic copy remains in the normal install stage "
+                f"with {copy_workers} copy worker(s)"
             )
             return True
 
-        self._log(f"[copy] early verified copy start source={live_path} destination={destination}")
+        release_entries = _load_source_hash_manifest(storage_root) or []
+        self._log(
+            f"[copy] early verified copy start source={live_path} destination={destination} "
+            f"workers={copy_workers}"
+        )
         original_copy_live_game(
             live_path,
             destination,
             source_version=source_version,
             on_progress=self._web_progress_callback(),
             cancel_event=cancel_event,
+            workers=copy_workers,
+            release_source_entries=release_entries,
         )
+
+        # copy_live_game has now read every destination file exactly once and
+        # checked that hash against both the bytes read from Live and, where
+        # applicable, the release-required source hash.
+        self._source_preflight_verified_root = _path_key(destination)
+        early_completed_copies.add(key)
         self._log(
-            "[copy] Live game copy passed whole-copy verification; "
-            "re-checking release delta inputs"
+            "[copy] merged whole-copy + release delta-source verification passed; "
+            "full package download may begin"
         )
-
-        destination_ok, destination_report = _verify_root(
-            self,
-            storage_root,
-            destination,
-            workers,
-            cancel_event,
-            post_copy=True,
-        )
-        if not destination_ok:
-            self._log(
-                "[copy] copied destination failed release source verification; no patches "
-                "were applied. Delete the destination before retrying."
-            )
-            return False
-
-        if destination_report is not None:
-            early_completed_copies.add(
-                _copy_key(live_path, destination, source_version)
-            )
-            self._log(
-                "[copy] copied destination verified successfully; full package download may begin"
-            )
         return True
 
     original_apply = ResilientSierraPatcherGUI._apply_patches_for_gui
