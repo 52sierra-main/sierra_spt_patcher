@@ -5,6 +5,8 @@ import json
 import ntpath
 import os
 import shutil
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,6 +15,8 @@ from . import proc
 COPY_STATE_FILENAME = ".sierra-copy-state.json"
 _COPY_STATE_FORMAT_VERSION = 1
 _COPY_CHUNK_BYTES = 4 * 1024 * 1024
+DEFAULT_COPY_WORKERS = 4
+MAX_COPY_WORKERS = 8
 
 
 def _io_path(path: str | os.PathLike) -> str:
@@ -177,6 +181,44 @@ def _remove_failed_copy(path: Path) -> None:
         pass
 
 
+def _worker_count(value: int) -> int:
+    try:
+        workers = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Copy / verification workers must be a whole number") from exc
+    if workers < 1 or workers > MAX_COPY_WORKERS:
+        raise ValueError(
+            f"Copy / verification workers must be between 1 and {MAX_COPY_WORKERS}"
+        )
+    return workers
+
+
+def _relative_key(value: str | os.PathLike) -> str:
+    return os.fspath(value).replace("\\", "/").strip("/").casefold()
+
+
+def _release_hash_map(entries: list[dict] | tuple[dict, ...] | None) -> dict[str, dict]:
+    result: dict[str, dict] = {}
+    for entry in entries or ():
+        relative = str(entry.get("path", "")).replace("\\", "/").strip("/")
+        key = _relative_key(relative)
+        if not key:
+            raise ValueError("release source hash entry has an empty path")
+        if key in result:
+            raise ValueError(f"duplicate release source hash path: {relative}")
+        try:
+            size = int(entry["size"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"invalid release source size: {relative}") from exc
+        sha256 = str(entry.get("sha256", "")).strip().lower()
+        if size < 0 or len(sha256) != 64 or any(
+            char not in "0123456789abcdef" for char in sha256
+        ):
+            raise ValueError(f"invalid release source hash entry: {relative}")
+        result[key] = {"path": relative, "size": size, "sha256": sha256}
+    return result
+
+
 def copy_live_game(
     source: str | os.PathLike,
     destination: str | os.PathLike,
@@ -184,15 +226,22 @@ def copy_live_game(
     source_version: str | None = None,
     on_progress=None,
     cancel_event=None,
+    workers: int = DEFAULT_COPY_WORKERS,
+    release_source_entries: list[dict] | tuple[dict, ...] | None = None,
 ) -> None:
     """Copy Live into a new SPT folder, resume safely, and verify every file.
 
-    Source SHA-256 is calculated while new files are being read for the copy.
-    Reused resume files are hashed from the source. After the copy pass, every
-    destination file is hashed and compared before the resume-state marker is
-    removed. A bad destination file is deleted so the next resume recopies it.
+    Copying and post-copy hashing run in parallel. Each source file is hashed while
+    it is read for the copy (or while validating a resumable reuse). The destination
+    is then read exactly once: that SHA-256 must match the bytes read from Live and,
+    for delta-source files, the release-required source hash as well.
+
+    A bad destination file is removed so the next resume recopies it. The resume
+    state marker is removed only after the entire destination and release checks pass.
     """
 
+    worker_count = _worker_count(workers)
+    release_hashes = _release_hash_map(release_source_entries)
     source_path = Path(source)
     destination_path = Path(destination)
     status = inspect_copy_destination(source_path, destination_path, source_version)
@@ -203,11 +252,12 @@ def copy_live_game(
     if on_progress is not None:
         on_progress("install:copy", 0, 1, "Scanning Live game...")
 
-    files: list[tuple[Path, Path, int]] = []
+    files: list[tuple[Path, Path, int, str]] = []
     directories: list[Path] = []
     total_bytes = 0
     remaining_bytes = 0
     source_root = _io_path(source_path)
+    source_keys: set[str] = set()
     for root, dirnames, filenames in os.walk(source_root):
         _raise_if_cancelled(cancel_event)
         root_path = Path(root)
@@ -219,8 +269,11 @@ def copy_live_game(
                 continue
             source_file = root_path / name
             destination_file = destination_path / relative_root / name
+            relative_text = os.path.relpath(_io_path(source_file), source_root).replace("\\", "/")
+            relative_key = _relative_key(relative_text)
+            source_keys.add(relative_key)
             size = os.path.getsize(_io_path(source_file))
-            files.append((source_file, destination_file, size))
+            files.append((source_file, destination_file, size, relative_text))
             total_bytes += size
             if not _same_file(source_file, destination_file):
                 try:
@@ -228,6 +281,13 @@ def copy_live_game(
                 except OSError:
                     existing_size = 0
                 remaining_bytes += max(0, size - existing_size)
+
+    missing_release = sorted(set(release_hashes) - source_keys)
+    if missing_release:
+        first = release_hashes[missing_release[0]]["path"]
+        raise RuntimeError(
+            f"Live game copy release verification failed: source file disappeared before copy: {first}"
+        )
 
     free_bytes = shutil.disk_usage(_io_path(_disk_usage_root(destination_path))).free
     if free_bytes < remaining_bytes:
@@ -244,25 +304,25 @@ def copy_live_game(
     for directory in directories:
         os.makedirs(_io_path(directory), exist_ok=True)
 
-    copied_bytes = 0
     progress_total = max(total_bytes, 1)
-    expected_hashes: dict[Path, str] = {}
+    copied_bytes = 0
+    progress_lock = threading.Lock()
 
-    for source_file, destination_file, size in files:
+    def advance_copy(amount: int, message: str) -> None:
+        nonlocal copied_bytes
+        with progress_lock:
+            copied_bytes += amount
+            current = copied_bytes
+        if on_progress is not None:
+            on_progress("install:copy", current, progress_total, message)
+
+    def copy_one(item: tuple[Path, Path, int, str]) -> tuple[Path, str, str]:
+        source_file, destination_file, size, relative_text = item
         _raise_if_cancelled(cancel_event)
         if _same_file(source_file, destination_file):
-            # Resume reuse is still verified cryptographically. Size+mtime is
-            # only a fast copy-skip hint, never the final integrity decision.
-            expected_hashes[destination_file] = _sha256_file(source_file, cancel_event)
-            copied_bytes += size
-            if on_progress is not None:
-                on_progress(
-                    "install:copy",
-                    copied_bytes,
-                    progress_total,
-                    f"Reusing {source_file.name}",
-                )
-            continue
+            source_hash = _sha256_file(source_file, cancel_event)
+            advance_copy(size, f"Reusing {source_file.name}")
+            return destination_file, source_hash, relative_text
 
         os.makedirs(_io_path(destination_file.parent), exist_ok=True)
         source_digest = hashlib.sha256()
@@ -276,57 +336,100 @@ def copy_live_game(
                     break
                 source_digest.update(chunk)
                 destination_stream.write(chunk)
-                copied_bytes += len(chunk)
-                if on_progress is not None:
-                    on_progress(
-                        "install:copy",
-                        copied_bytes,
-                        progress_total,
-                        f"Copying {source_file.name}",
-                    )
+                advance_copy(len(chunk), f"Copying {source_file.name}")
         shutil.copystat(_io_path(source_file), _io_path(destination_file))
-        expected_hashes[destination_file] = source_digest.hexdigest()
+        return destination_file, source_digest.hexdigest(), relative_text
 
-    # Full copy verification protects files that are not part of source_hashes.json
-    # (for example files unchanged between Live and the target SPT release).
+    expected_hashes: dict[Path, tuple[str, str]] = {}
+    copy_workers = max(1, min(worker_count, len(files) or 1))
+    with ThreadPoolExecutor(max_workers=copy_workers) as executor:
+        futures = {executor.submit(copy_one, item): item for item in files}
+        for future in as_completed(futures):
+            _raise_if_cancelled(cancel_event)
+            try:
+                destination_file, source_hash, relative_text = future.result()
+            except Exception:
+                for pending in futures:
+                    pending.cancel()
+                raise
+            expected_hashes[destination_file] = (source_hash, relative_text)
+
+    # One parallel destination-read pass proves both copy integrity and release
+    # compatibility. Delta-source files are not read a second time afterward.
     verify_total = max(len(files), 1)
-    for index, (source_file, destination_file, expected_size) in enumerate(files, 1):
+    verified = 0
+    verify_lock = threading.Lock()
+
+    def verify_one(item: tuple[Path, Path, int, str]) -> str:
+        _source_file, destination_file, expected_size, relative_text = item
         _raise_if_cancelled(cancel_event)
-        relative = os.path.relpath(_io_path(source_file), source_root)
 
         if not os.path.isfile(_io_path(destination_file)):
-            raise RuntimeError(f"Live game copy verification failed: missing {relative}")
+            raise RuntimeError(f"Live game copy verification failed: missing {relative_text}")
         actual_size = os.path.getsize(_io_path(destination_file))
         if actual_size != expected_size:
             _remove_failed_copy(destination_file)
             raise RuntimeError(
                 "Live game copy verification failed: "
-                f"{relative} size changed (expected {expected_size}, found {actual_size})"
+                f"{relative_text} size changed (expected {expected_size}, found {actual_size})"
             )
 
         actual_hash = _sha256_file(destination_file, cancel_event)
-        expected_hash = expected_hashes[destination_file]
-        if actual_hash != expected_hash:
+        expected_source_hash, _ = expected_hashes[destination_file]
+        if actual_hash != expected_source_hash:
             _remove_failed_copy(destination_file)
             raise RuntimeError(
                 "Live game copy verification failed: "
-                f"{relative} SHA-256 mismatch (expected {expected_hash}, found {actual_hash})"
+                f"{relative_text} SHA-256 mismatch "
+                f"(expected {expected_source_hash}, found {actual_hash})"
             )
 
-        if on_progress is not None:
-            on_progress(
-                "install:copy",
-                index,
-                verify_total,
-                f"verified {index}/{len(files)} source files",
-            )
+        release_entry = release_hashes.get(_relative_key(relative_text))
+        if release_entry is not None:
+            if actual_size != release_entry["size"]:
+                _remove_failed_copy(destination_file)
+                raise RuntimeError(
+                    "Live game copy release verification failed: "
+                    f"{relative_text} size mismatch "
+                    f"(expected {release_entry['size']}, found {actual_size})"
+                )
+            if actual_hash != release_entry["sha256"]:
+                _remove_failed_copy(destination_file)
+                raise RuntimeError(
+                    "Live game copy release verification failed: "
+                    f"{relative_text} SHA-256 mismatch "
+                    f"(expected {release_entry['sha256']}, found {actual_hash})"
+                )
+        return relative_text
+
+    verify_workers = max(1, min(worker_count, len(files) or 1))
+    with ThreadPoolExecutor(max_workers=verify_workers) as executor:
+        futures = {executor.submit(verify_one, item): item for item in files}
+        for future in as_completed(futures):
+            _raise_if_cancelled(cancel_event)
+            try:
+                relative_text = future.result()
+            except Exception:
+                for pending in futures:
+                    pending.cancel()
+                raise
+            with verify_lock:
+                verified += 1
+                current = verified
+            if on_progress is not None:
+                on_progress(
+                    "install:copy",
+                    current,
+                    verify_total,
+                    f"verified {current}/{len(files)} source files",
+                )
 
     # A resume destination should mirror the current Live file set. Unexpected
     # files mean the destination was changed independently or came from a stale
     # source state, so keep the state marker and require the user to resolve it.
     expected_relative_files = {
         os.path.normcase(os.path.relpath(_io_path(destination_file), _io_path(destination_path)))
-        for _source_file, destination_file, _size in files
+        for _source_file, destination_file, _size, _relative_text in files
     }
     for root, _dirnames, filenames in os.walk(_io_path(destination_path)):
         _raise_if_cancelled(cancel_event)
