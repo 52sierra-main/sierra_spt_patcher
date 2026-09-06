@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import tempfile
 import threading
@@ -46,6 +47,44 @@ class GameCopyTests(unittest.TestCase):
             self.assertFalse(status.ready)
             self.assertEqual(status.reason, "not_empty")
 
+    def test_copy_worker_setting_is_limited_to_one_through_eight(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "Live"
+            destination = Path(temporary) / "SPT"
+            source.mkdir()
+            (source / "EscapeFromTarkov.exe").write_bytes(b"exe")
+
+            with self.assertRaisesRegex(ValueError, "between 1 and 8"):
+                copy_live_game(source, destination, workers=0)
+            with self.assertRaisesRegex(ValueError, "between 1 and 8"):
+                copy_live_game(source, destination, workers=9)
+
+    def test_copy_and_verification_use_requested_parallel_workers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "Live"
+            destination = root / "SPT"
+            source.mkdir()
+            (source / "EscapeFromTarkov.exe").write_bytes(b"exe")
+            for index in range(3):
+                (source / f"file-{index}.bin").write_bytes(bytes([index + 1]) * 4096)
+
+            real_executor = game_copy.ThreadPoolExecutor
+            worker_counts: list[int] = []
+
+            def executor_factory(*args, **kwargs):
+                worker_counts.append(int(kwargs["max_workers"]))
+                return real_executor(*args, **kwargs)
+
+            with mock.patch.object(
+                game_copy,
+                "ThreadPoolExecutor",
+                side_effect=executor_factory,
+            ):
+                copy_live_game(source, destination, workers=3)
+
+            self.assertEqual(worker_counts, [3, 3])
+
     def test_cancelled_copy_is_resumable_and_finishes_cleanly(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -69,6 +108,7 @@ class GameCopyTests(unittest.TestCase):
                     source_version="1.0",
                     on_progress=cancel_after_first_chunk,
                     cancel_event=cancel_event,
+                    workers=2,
                 )
 
             self.assertTrue((destination / COPY_STATE_FILENAME).is_file())
@@ -90,6 +130,7 @@ class GameCopyTests(unittest.TestCase):
                     destination,
                     source_version="1.0",
                     cancel_event=cancel_event,
+                    workers=2,
                 )
 
             self.assertFalse((destination / COPY_STATE_FILENAME).exists())
@@ -118,13 +159,111 @@ class GameCopyTests(unittest.TestCase):
                 side_effect=corrupt_destination_hash,
             ):
                 with self.assertRaisesRegex(RuntimeError, "SHA-256 mismatch"):
-                    copy_live_game(source, destination, source_version="1.0")
+                    copy_live_game(source, destination, source_version="1.0", workers=2)
 
             self.assertTrue((destination / COPY_STATE_FILENAME).is_file())
             self.assertFalse((destination / "payload.bin").exists())
             status = inspect_copy_destination(source, destination, "1.0")
             self.assertTrue(status.ready)
             self.assertTrue(status.resumable)
+
+    def test_release_hash_is_checked_in_same_post_copy_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "Live"
+            destination = root / "SPT"
+            source.mkdir()
+            (source / "EscapeFromTarkov.exe").write_bytes(b"exe")
+            payload = b"release source bytes"
+            (source / "payload.bin").write_bytes(payload)
+
+            correct = {
+                "path": "payload.bin",
+                "size": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+            copy_live_game(
+                source,
+                destination,
+                source_version="1.0",
+                workers=2,
+                release_source_entries=[correct],
+            )
+            self.assertEqual((destination / "payload.bin").read_bytes(), payload)
+
+    def test_release_hash_mismatch_keeps_resume_state_and_removes_bad_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "Live"
+            destination = root / "SPT"
+            source.mkdir()
+            (source / "EscapeFromTarkov.exe").write_bytes(b"exe")
+            payload = b"release source bytes"
+            (source / "payload.bin").write_bytes(payload)
+
+            wrong = {
+                "path": "payload.bin",
+                "size": len(payload),
+                "sha256": "0" * 64,
+            }
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "release verification failed: .*SHA-256 mismatch",
+            ):
+                copy_live_game(
+                    source,
+                    destination,
+                    source_version="1.0",
+                    workers=2,
+                    release_source_entries=[wrong],
+                )
+
+            self.assertTrue((destination / COPY_STATE_FILENAME).is_file())
+            self.assertFalse((destination / "payload.bin").exists())
+
+    def test_fresh_destination_files_are_hashed_once_after_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "Live"
+            destination = root / "SPT"
+            source.mkdir()
+            (source / "EscapeFromTarkov.exe").write_bytes(b"exe")
+            payload = b"one destination read"
+            (source / "payload.bin").write_bytes(payload)
+
+            release_entry = {
+                "path": "payload.bin",
+                "size": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+            real_sha256 = game_copy._sha256_file
+            destination_reads: dict[Path, int] = {}
+
+            def count_destination_hash(path, cancel_event=None):
+                candidate = Path(path)
+                try:
+                    candidate.relative_to(destination)
+                except ValueError:
+                    pass
+                else:
+                    destination_reads[candidate] = destination_reads.get(candidate, 0) + 1
+                return real_sha256(path, cancel_event)
+
+            with mock.patch.object(
+                game_copy,
+                "_sha256_file",
+                side_effect=count_destination_hash,
+            ):
+                copy_live_game(
+                    source,
+                    destination,
+                    source_version="1.0",
+                    workers=2,
+                    release_source_entries=[release_entry],
+                )
+
+            self.assertEqual(destination_reads[destination / "payload.bin"], 1)
+            self.assertEqual(destination_reads[destination / "EscapeFromTarkov.exe"], 1)
 
     @unittest.skipUnless(os.name == "nt", "Windows long-path behavior")
     def test_copy_supports_long_windows_paths(self) -> None:
@@ -140,7 +279,7 @@ class GameCopyTests(unittest.TestCase):
             with open(game_copy._io_path(source_file), "wb") as stream:
                 stream.write(b"payload")
 
-            copy_live_game(source, destination, source_version="1.0")
+            copy_live_game(source, destination, source_version="1.0", workers=2)
 
             with open(game_copy._io_path(destination / relative), "rb") as stream:
                 self.assertEqual(stream.read(), b"payload")
