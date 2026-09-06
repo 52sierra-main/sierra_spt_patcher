@@ -23,7 +23,7 @@ import tempfile
 import threading
 from pathlib import Path
 
-LOG_DIR_NAME = "logs"
+LOG_DIR_NAME = "sierra_patcher_logs"
 LOG_FILE_PREFIX = "sierra"
 MAX_SESSIONS_KEPT = 10
 
