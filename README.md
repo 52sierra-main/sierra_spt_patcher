@@ -29,6 +29,7 @@ For troubleshooting and a foolproof step-by-step guide, see **[USER_GUIDE.md](US
 
 > Sierra Installer is an independent community project and is not affiliated with Battlestate Games.
 
+> This repository contains a moderate amount of AI generated code which has been throughly and carefully checked and overseen by sierra and contributors.
 
 © Suho Jang(a.k.a sierra) - since 2025
 
